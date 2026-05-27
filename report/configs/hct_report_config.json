@@ -1,0 +1,192 @@
+{
+  "偏航特性": {
+    "数据集检索": "(scenario_object.meta.meta_DPDT.DPDT_Badcase.lv1 : \"DT导航特性\" and not (scenario_object.meta.meta_DPDT.DPDT_Badcase.lv2 : \"DT导航特性/小样本集\" or scenario_object.meta.meta_DPDT.DPDT_Badcase.lv2 : \"DT导航特性/0714ABCD实车BadCase\" or scenario_object.meta.meta_DPDT.DPDT_Badcase.lv2 : \"DT导航特性/SD_Feature\")) or scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv1 : \"导航\" or scenario_object.meta.meta_QA.open_loop_evalution_category : \"通用-偏航\" or scenario_object.meta.meta_HCTQA.problem_phenomenon : \"效率类-偏航\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "偏航失败帧率",
+        "agg": "sum",
+        "numerator": "DirectionDeviMetricOP_EvalFailedFrame",
+        "denominator": "DirectionDeviMetricOP_EvalTotalFrame",
+        "value_format": "%",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "偏航失败帧差",
+        "agg": "sum",
+        "numerator": "DirectionDeviMetricOP_EvalFailedFrame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": {
+      "enabled": true,
+      "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2"
+    }
+  },
+  "纵向特性": {
+    "数据集检索": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2 : \"纵向/CUTIN\" or scenario_object.meta.meta_QA.stable_dataset.lv1 : \"大规控-泛cutin\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "平均风险score差",
+        "agg": "ave",
+        "numerator": "CollisionRiskMetricOP_takeover_average_score",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<1",
+        "optimize_threshold": "<-1",
+        "note": "越小越好"
+      },
+      {
+        "name": "平均dist差",
+        "agg": "ave",
+        "numerator": "YieldDistanceMetricOP_AvgDist",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      },
+      {
+        "name": "碰撞帧率",
+        "agg": "sum",
+        "numerator": "YieldCollisionMetricOP_Collision",
+        "denominator": "YieldCollisionMetricOP_Total_frames",
+        "value_format": "%",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "碰撞帧数差",
+        "agg": "sum",
+        "numerator": "YieldCollisionMetricOP_Collision",
+        "denominator": "YieldCollisionMetricOP_Total_frames",
+        "value_format": "int",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "平均多模态风险score差",
+        "agg": "sum",
+        "numerator": "CollisionRiskMetricOP_MultiTraj_takeover_average_score_Avg",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<1",
+        "optimize_threshold": "<-1",
+        "note": "越小越好"
+      },
+      {
+        "name": "平均多模态dist差",
+        "agg": "ave",
+        "numerator": "YieldDistanceMetricOP_MultiTraj_AvgDist_Avg",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": {
+      "enabled": true,
+      "selector": "scenario_object.meta.general.category.lv2"
+    }
+  },
+  "横向特性": {
+    "数据集检索": "scenario_object.meta.meta_DPDT.DPDT_Badcase.lv2 : \"DT-横向-badcase守护集/居中\" or scenario_object.meta.meta_DPDT.DPDT_Badcase.lv2 : \"DT横向-因果混淆/车道居中\" or scenario_object.meta.meta_DPDT.DPDT_Expert.lv2 : \"DT-横向/居中\" or scenario_object.meta.meta_HCTQA.problem_phenomenon : \"拟人类-不居中\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "居中失败帧率",
+        "agg": "sum",
+        "numerator": "GoCenterMetricOP_EvalFailedFrame",
+        "denominator": "GoCenterMetricOP_EvalTotalFrame",
+        "value_format": "%",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "居中失败帧数",
+        "agg": "sum",
+        "numerator": "GoCenterMetricOP_EvalFailedFrame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "居中平均偏移",
+        "agg": "ave",
+        "numerator": "GoCenterMetricOP",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": {
+      "enabled": true,
+      "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv4"
+    }
+  },
+  "换道特性": {
+    "数据集检索": "scenario_object.meta.meta_HCTQA.problem_phenomenon : \"效率类-多余变道\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "换道意图失败帧率",
+        "agg": "sum",
+        "numerator": "LCIntentionMetricOP_deprecated_extralc+LCIntentionMetricOP_deprecated_notlc",
+        "denominator": "LCIntentionMetricOP_deprecated_extralc+LCIntentionMetricOP_deprecated_notlc",
+        "value_format": "%",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "换道意图失败帧数差",
+        "agg": "sum",
+        "numerator": "LCIntentionMetricOP_deprecated_extralc+LCIntentionMetricOP_deprecated_notlc",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "换道压实线帧率",
+        "agg": "sum",
+        "numerator": "SolidLineLaneChangeMetricOP",
+        "denominator": "SolidLineLaneChangeMetricOP_total_frames",
+        "value_format": "%",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "换道压实线帧数差",
+        "agg": "sum",
+        "numerator": "SolidLineLaneChangeMetricOP",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": {
+      "enabled": true,
+      "selector": "scenario_object.meta.meta_HCTQA.direct_reason"
+    }
+  }
+}
