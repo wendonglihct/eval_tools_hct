@@ -1,0 +1,23 @@
+{
+    "schema": "2.0",
+    "config": {
+        "update_multi": true
+    },
+    "body": {
+        "direction": "vertical",
+        "horizontal_spacing": "8px",
+        "vertical_spacing": "0px",
+        "horizontal_align": "left",
+        "vertical_align": "top",
+        "padding": "0px 0px 0px 0px",
+        "elements": [
+            {
+                "tag": "markdown",
+                "content": "[评测结果-表格](https://open.feishu.cn/server-docs/im-v1/message-reaction/emojis-introduce)",
+                "text_align": "left",
+                "text_size": "normal",
+                "margin": "0px 0px 0px 0px"
+            }
+        ]
+    }
+}
