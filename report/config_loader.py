@@ -76,6 +76,8 @@ def make_selector(field_path: str) -> Callable[[dict], List[str]]:
 
 _IN_PATTERN = re.compile(r'([A-Za-z0-9_\.]+)\s+in\s+\[([^\]]*)\]', flags=re.IGNORECASE)
 _COND_PATTERN = re.compile(r'([A-Za-z0-9_\.]+)\s*:\s*"([^"]*)"')
+# 通配符：field : *  → 字段存在任意非空值即真
+_WILDCARD_PATTERN = re.compile(r'([A-Za-z0-9_\.]+)\s*:\s*\*')
 
 
 def _parse_in_values(text: str) -> List[str]:
@@ -91,6 +93,14 @@ def _match_cond(meta: dict, field_path: str, expected: str) -> bool:
         return False
     expected_str = str(expected)
     return any(str(v) == expected_str for v in collect_path_values(meta, parts))
+
+
+def _match_wildcard(meta: dict, field_path: str) -> bool:
+    """字段路径上存在任意非空值即真。"""
+    parts = normalize_path(field_path)
+    if not parts:
+        return False
+    return any(v is not None and str(v) != "" for v in collect_path_values(meta, parts))
 
 
 def _match_in(meta: dict, field_path: str, expected_values: List[str]) -> bool:
@@ -138,6 +148,7 @@ def compile_query(query: str) -> Callable[[dict], bool]:
     check = re.sub(r"\bNOT\b", "not", check, flags=re.IGNORECASE)
     check = _IN_PATTERN.sub("True", check)
     check = _COND_PATTERN.sub("True", check)
+    check = _WILDCARD_PATTERN.sub("True", check)
     residue = re.sub(r"\b(True|False|and|or|not)\b", "", check).replace("(", "").replace(")", "").strip()
     if residue:
         raise ValueError(f"数据集检索存在无法解析的内容: {residue}")
@@ -153,6 +164,10 @@ def compile_query(query: str) -> Callable[[dict], bool]:
         )
         expr = _COND_PATTERN.sub(
             lambda m: "True" if _match_cond(meta, m.group(1), m.group(2)) else "False",
+            expr,
+        )
+        expr = _WILDCARD_PATTERN.sub(
+            lambda m: "True" if _match_wildcard(meta, m.group(1)) else "False",
             expr,
         )
         return _safe_eval_bool(expr)
@@ -197,6 +212,9 @@ def load_hct_feature_config(json_path: str = None) -> List[Dict[str, Any]]:
     for feature_name, item in raw.items():
         if not isinstance(item, dict):
             raise ValueError(f"{feature_name} 配置必须是对象")
+        # 空对象视为占位（未配置），跳过
+        if not item:
+            continue
         query = str(item.get("数据集检索", "")).strip()
         if not query:
             raise ValueError(f"{feature_name} 缺少 数据集检索")
@@ -204,22 +222,61 @@ def load_hct_feature_config(json_path: str = None) -> List[Dict[str, Any]]:
         if not isinstance(metric_list, list) or not metric_list:
             raise ValueError(f"{feature_name} 指标配置必须是非空数组")
 
-        small_cfg = item.get("小特性", {}) or {}
-        selector_text = str(small_cfg.get("selector", "") or "").strip()
-        small_enabled = bool(small_cfg.get("enabled", False)) and bool(selector_text)
-        extractor = make_selector(selector_text) if small_enabled else (lambda _meta: [])
+        # 过滤 enabled=false 的指标项（缺省视为启用）
+        original_primary = int(item.get("primary_result", 0))
+        kept: List[Dict[str, Any]] = []
+        new_primary = 0
+        for idx, m in enumerate(metric_list):
+            if not isinstance(m, dict):
+                continue
+            if not bool(m.get("enabled", True)):
+                continue
+            if idx == original_primary:
+                new_primary = len(kept)
+            kept.append(m)
+        if not kept:
+            raise ValueError(f"{feature_name} 指标配置全部 enabled=false，无可用项")
+        # 若原 primary_result 被禁用，回退到首项
+        if original_primary >= len(metric_list) or not bool(
+            metric_list[original_primary].get("enabled", True)
+            if isinstance(metric_list[original_primary], dict)
+            else False
+        ):
+            new_primary = 0
+        metric_list = kept
+
+        # 小特性：仅支持 list（多小特性）。每项 {enabled, selector}。
+        raw_small = item.get("小特性")
+        if raw_small is None:
+            raw_small_list = []
+        elif isinstance(raw_small, list):
+            raw_small_list = raw_small
+        else:
+            raise ValueError(f"{feature_name} 小特性必须是数组")
+
+        small_features: List[Dict[str, Any]] = []
+        for sf in raw_small_list:
+            if not isinstance(sf, dict):
+                raise ValueError(f"{feature_name} 小特性条目必须是对象")
+            sel = str(sf.get("selector", "") or "").strip()
+            en = bool(sf.get("enabled", False)) and bool(sel)
+            small_features.append({
+                "field_sql": sel if en else "",
+                "extractor": make_selector(sel) if en else (lambda _meta: []),
+                "enabled": en,
+            })
+        # 至少占位一个，保持下游遍历稳定
+        if not small_features:
+            small_features = [{"field_sql": "", "extractor": (lambda _meta: []), "enabled": False}]
 
         features.append(
             {
                 "name": str(feature_name),
                 "sql": query,
                 "predicate": compile_query(query),
-                "primary_result": int(item.get("primary_result", 0)),
+                "primary_result": new_primary,
                 "results": list(metric_list),
-                "small_feature": {
-                    "field_sql": selector_text,
-                    "extractor": extractor,
-                },
+                "small_features": small_features,
             }
         )
     if not features:

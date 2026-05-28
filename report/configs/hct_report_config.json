@@ -4,7 +4,8 @@
     "primary_result": 0,
     "指标配置": [
       {
-        "name": "偏航失败帧率",
+        "name": "偏航帧率",
+        "enabled": false,
         "agg": "sum",
         "numerator": "DirectionDeviMetricOP_EvalFailedFrame",
         "denominator": "DirectionDeviMetricOP_EvalTotalFrame",
@@ -14,8 +15,20 @@
         "note": "越小越好"
       },
       {
-        "name": "偏航失败帧差",
+        "name": "偏航帧差",
+        "enabled": true,
         "agg": "sum",
+        "numerator": "DirectionDeviMetricOP_EvalFailedFrame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "偏航case数",
+        "enabled": true,
+        "agg": "metric_result:false",
         "numerator": "DirectionDeviMetricOP_EvalFailedFrame",
         "denominator": null,
         "value_format": "int",
@@ -24,17 +37,20 @@
         "note": "越小越好"
       }
     ],
-    "小特性": {
-      "enabled": true,
-      "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2"
-    }
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2"
+      }
+    ]
   },
-  "纵向特性": {
+  "纵向特性-因果": {
     "数据集检索": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2 : \"纵向/CUTIN\" or scenario_object.meta.meta_QA.stable_dataset.lv1 : \"大规控-泛cutin\"",
     "primary_result": 0,
     "指标配置": [
       {
         "name": "平均风险score差",
+        "enabled": true,
         "agg": "ave",
         "numerator": "CollisionRiskMetricOP_takeover_average_score",
         "denominator": null,
@@ -45,6 +61,7 @@
       },
       {
         "name": "平均dist差",
+        "enabled": true,
         "agg": "ave",
         "numerator": "YieldDistanceMetricOP_AvgDist",
         "denominator": null,
@@ -55,6 +72,7 @@
       },
       {
         "name": "碰撞帧率",
+        "enabled": false,
         "agg": "sum",
         "numerator": "YieldCollisionMetricOP_Collision",
         "denominator": "YieldCollisionMetricOP_Total_frames",
@@ -65,17 +83,19 @@
       },
       {
         "name": "碰撞帧数差",
+        "enabled": true,
         "agg": "sum",
         "numerator": "YieldCollisionMetricOP_Collision",
-        "denominator": "YieldCollisionMetricOP_Total_frames",
+        "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<1%",
-        "optimize_threshold": "<-1%",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
         "note": "越小越好"
       },
       {
         "name": "平均多模态风险score差",
-        "agg": "sum",
+        "enabled": true,
+        "agg": "ave",
         "numerator": "CollisionRiskMetricOP_MultiTraj_takeover_average_score_Avg",
         "denominator": null,
         "value_format": "float",
@@ -85,26 +105,30 @@
       },
       {
         "name": "平均多模态dist差",
+        "enabled": true,
         "agg": "ave",
         "numerator": "YieldDistanceMetricOP_MultiTraj_AvgDist_Avg",
         "denominator": null,
-        "value_format": "int",
+        "value_format": "float",
         "rollback_threshold": "<0.5",
         "optimize_threshold": "<-0.5",
         "note": "越小越好"
       }
     ],
-    "小特性": {
-      "enabled": true,
-      "selector": "scenario_object.meta.general.category.lv2"
-    }
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.general.category.lv2"
+      }
+    ]
   },
   "横向特性": {
     "数据集检索": "scenario_object.meta.meta_DPDT.DPDT_Badcase.lv2 : \"DT-横向-badcase守护集/居中\" or scenario_object.meta.meta_DPDT.DPDT_Badcase.lv2 : \"DT横向-因果混淆/车道居中\" or scenario_object.meta.meta_DPDT.DPDT_Expert.lv2 : \"DT-横向/居中\" or scenario_object.meta.meta_HCTQA.problem_phenomenon : \"拟人类-不居中\"",
     "primary_result": 0,
     "指标配置": [
       {
-        "name": "居中失败帧率",
+        "name": "不居中帧率",
+        "enabled": false,
         "agg": "sum",
         "numerator": "GoCenterMetricOP_EvalFailedFrame",
         "denominator": "GoCenterMetricOP_EvalTotalFrame",
@@ -114,7 +138,8 @@
         "note": "越小越好"
       },
       {
-        "name": "居中失败帧数",
+        "name": "不居中帧数差",
+        "enabled": true,
         "agg": "sum",
         "numerator": "GoCenterMetricOP_EvalFailedFrame",
         "denominator": null,
@@ -125,26 +150,124 @@
       },
       {
         "name": "居中平均偏移",
+        "enabled": true,
         "agg": "ave",
         "numerator": "GoCenterMetricOP",
         "denominator": null,
-        "value_format": "int",
+        "filter": "GoCenterMetricOP.metric_value <= 5.0",
+        "value_format": "float",
         "rollback_threshold": "<0.5",
         "optimize_threshold": "<-0.5",
         "note": "越小越好"
       }
     ],
-    "小特性": {
-      "enabled": true,
-      "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv4"
-    }
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv4"
+      }
+    ]
+  },
+  "碰撞特性": {
+    "数据集检索": "scenario_object.meta.meta_QA.open_loop_evalution_category : \"通用-碰撞风险\" and scenario_object.meta.cfg_grading.obstacle_pass_yield: * and scenario_object.tenant : \"hct_astra\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "平均风险score差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "CollisionRiskMetricOP_takeover_average_score",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<1",
+        "optimize_threshold": "<-1",
+        "note": "越小越好"
+      },
+      {
+        "name": "平均dist差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "YieldDistanceMetricOP_AvgDist",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      },
+      {
+        "name": "碰撞帧率",
+        "enabled": false,
+        "agg": "sum",
+        "numerator": "YieldCollisionMetricOP_Collision",
+        "denominator": "YieldCollisionMetricOP_Total_frames",
+        "value_format": "%",
+        "rollback_threshold": "<1%",
+        "optimize_threshold": "<-1%",
+        "note": "越小越好"
+      },
+      {
+        "name": "碰撞帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "YieldCollisionMetricOP_Collision",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "平均多模态风险score差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "CollisionRiskMetricOP_MultiTraj_takeover_average_score_Avg",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<1",
+        "optimize_threshold": "<-1",
+        "note": "越小越好"
+      },
+      {
+        "name": "平均多模态dist差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "YieldDistanceMetricOP_MultiTraj_AvgDist_Avg",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      },
+      {
+        "name": "越线帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "YieldDistanceMetricOP",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.general.category.lv2"
+      },
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.meta_HCTQA.problem_phenomenon"
+      }
+    ]
   },
   "换道特性": {
     "数据集检索": "scenario_object.meta.meta_HCTQA.problem_phenomenon : \"效率类-多余变道\"",
     "primary_result": 0,
     "指标配置": [
       {
-        "name": "换道意图失败帧率",
+        "name": "换道失败帧率",
+        "enabled": false,
         "agg": "sum",
         "numerator": "LCIntentionMetricOP_deprecated_extralc+LCIntentionMetricOP_deprecated_notlc",
         "denominator": "LCIntentionMetricOP_deprecated_extralc+LCIntentionMetricOP_deprecated_notlc",
@@ -154,17 +277,30 @@
         "note": "越小越好"
       },
       {
-        "name": "换道意图失败帧数差",
+        "name": "换道失败帧数差",
+        "enabled": true,
         "agg": "sum",
         "numerator": "LCIntentionMetricOP_deprecated_extralc+LCIntentionMetricOP_deprecated_notlc",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<1%",
-        "optimize_threshold": "<-1%",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "换道平均intention",
+        "enabled": false,
+        "agg": "ave",
+        "numerator": "LCIntentionMetricOP_extralc+LCIntentionMetricOP_notlc",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
         "note": "越小越好"
       },
       {
         "name": "换道压实线帧率",
+        "enabled": false,
         "agg": "sum",
         "numerator": "SolidLineLaneChangeMetricOP",
         "denominator": "SolidLineLaneChangeMetricOP_total_frames",
@@ -175,18 +311,269 @@
       },
       {
         "name": "换道压实线帧数差",
+        "enabled": true,
         "agg": "sum",
         "numerator": "SolidLineLaneChangeMetricOP",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<1%",
-        "optimize_threshold": "<-1%",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
         "note": "越小越好"
       }
     ],
-    "小特性": {
-      "enabled": true,
-      "selector": "scenario_object.meta.meta_HCTQA.direct_reason"
-    }
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.meta_HCTQA.direct_reason"
+      }
+    ]
+  },
+  "闯红灯": {
+    "数据集检索": "scenario_object.meta.meta_HCTQA.problem_phenomenon : \"交规类-闯红灯\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "闯红灯帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "TrajAreaMetric_EvalFailedFrame+RedLightPassMetricOP_fail_eval_frame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "TrajAreaMetric_EvalFailedFrame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "verify帧数差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "RedLightPassMetricOP_fail_eval_frame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.general.category.lv2"
+      }
+    ]
+  },
+  "重刹": {
+    "数据集检索": "scenario_object.meta.meta_HCTQA.problem_phenomenon : \"舒适类-重刹\" and scenario_object.meta.meta_QA.open_loop_evalution_category : \"通用-关键帧重刹\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "重刹帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "LatLonTrajLimitMetricOP+AnnoHardBrakeMetricOP_fail_frame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "LatLonTrajLimitMetricOP",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea平均acc差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "LatLonTrajLimitMetricOP_AccAverage",
+        "denominator": null,
+        "filter": "LatLonTrajLimitMetricOP.metric_result:false",
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      },
+      {
+        "name": "verify帧数差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "AnnoHardBrakeMetricOP_fail_frame",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "verify平均acc差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "AnnoHardBrakeMetricOP_fail_acc",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.general.category.lv1"
+      }
+    ]
+  },
+  "点刹": {
+    "数据集检索": "scenario_object.meta.meta_HCTQA.problem_phenomenon : \"舒适类-点刹\" and scenario_object.meta.meta_QA.open_loop_evalution_category : \"通用-加减速意图\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "点刹帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "LatLonTrajLimitMetricOP",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea平均acc差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "LatLonTrajLimitMetricOP_AccAverage",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea平均aspeed差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "LatLonTrajLimitMetricOP_SpeedAverage",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": [
+      {
+        "enabled": true,
+        "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2"
+      }
+    ]
+  },
+  "车速过低":{
+    "数据集检索": "scenario_object.meta.meta_QA.open_loop_evalution_category : \"通用-加减速意图\" and scenario_object.meta.meta_HCTQA.problem_phenomenon : \"拟人类-车速过低\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "点刹帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "LatLonTrajLimitMetricOP",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea平均acc差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "LatLonTrajLimitMetricOP_AccAverage",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea平均aspeed差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "LatLonTrajLimitMetricOP_SpeedAverage",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": [
+      {
+        "enabled": false,
+        "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2"
+      }
+    ]
+  },
+  "起步慢": {
+    "数据集检索": "scenario_object.meta.meta_HCTQA.problem_phenomenon : \"效率类-起步慢\"",
+    "primary_result": 0,
+    "指标配置": [
+      {
+        "name": "点刹帧数差",
+        "enabled": true,
+        "agg": "sum",
+        "numerator": "LatLonTrajLimitMetricOP",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea平均acc差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "LatLonTrajLimitMetricOP_AccAverage",
+        "denominator": null,
+        "value_format": "float",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
+        "note": "越小越好"
+      },
+      {
+        "name": "TrajArea平均aspeed差",
+        "enabled": true,
+        "agg": "ave",
+        "numerator": "LatLonTrajLimitMetricOP_SpeedAverage",
+        "denominator": null,
+        "value_format": "int",
+        "rollback_threshold": "<10",
+        "optimize_threshold": "<-10",
+        "note": "越小越好"
+      }
+    ],
+    "小特性": [
+      {
+        "enabled": false,
+        "selector": "scenario_object.meta.meta_PNCDEV.badcase_topics_Openloop.lv2"
+      }
+    ]
   }
 }

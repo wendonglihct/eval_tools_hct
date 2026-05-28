@@ -60,14 +60,25 @@ def _normalize_ver_map(ver_map, target_len):
 def _extract_sim_records(task_id):
     data = _load_task_json(task_id)
     records = []
+    # sim 顶层这些字段也注入 meta，使 DSL 中 `scenario_object.<field>` 写法可解析
+    # （DSL 会剥离 scenario_object./meta. 前缀，最终在 meta 里查找）
+    SIM_LEVEL_FIELDS = (
+        "tenant", "task_id", "task_hardware_type", "task_billing_pool",
+        "data_billing_type", "agent_name", "agent_queue_name",
+        "scenario_start_time", "scenario_execution_duration", "task_create_time",
+    )
     for sim in data.get("es_sim", []):
         if sim.get("scenario_execution_result") not in PASS_STATUS:
             continue
         raw = sim.get("scenario_object", {}).get("raw", {})
+        meta = dict(raw.get("meta", {}) or {})
+        for k in SIM_LEVEL_FIELDS:
+            if k in sim and k not in meta:
+                meta[k] = sim[k]
         records.append(
             {
                 "scenario_id": sim.get("scenario_id"),
-                "meta": raw.get("meta", {}) or {},
+                "meta": meta,
                 "evaluation_result": sim.get("evaluation_result", {}) or {},
             }
         )
@@ -108,6 +119,107 @@ def _metric_value(rec, metric_key):
         return 0.0
 
 
+def _parse_result_agg(agg_mode):
+    """agg='metric_result:<bool>' 时返回目标布尔值；否则返回 None。
+    支持 true/false、1/0（大小写不敏感）。"""
+    text = str(agg_mode or "").strip().lower()
+    prefix = "metric_result:"
+    if not text.startswith(prefix):
+        return None
+    target = text[len(prefix):].strip()
+    if target in ("true", "1"):
+        return True
+    if target in ("false", "0"):
+        return False
+    return None
+
+
+def _metric_result_equals(rec, metric_key, target):
+    """metric_result 为目标布尔值时返回 1.0，否则 0.0。"""
+    metric = rec.get("evaluation_result", {}).get(metric_key, {})
+    raw = metric.get("metric_result", None)
+    if isinstance(raw, bool):
+        val = raw
+    elif isinstance(raw, str):
+        s = raw.strip().lower()
+        if s in ("true", "1"):
+            val = True
+        elif s in ("false", "0"):
+            val = False
+        else:
+            return 0.0
+    else:
+        return 0.0
+    return 1.0 if val == target else 0.0
+
+
+def _record_term_value(rec, metric_key, agg_mode):
+    """逐条记录的指标取值：
+    - agg='metric_result:<bool>' → 1/0 计数
+    - 其他 agg（sum/ave）→ metric_value
+    """
+    target = _parse_result_agg(agg_mode)
+    if target is not None:
+        return _metric_result_equals(rec, metric_key, target)
+    return _metric_value(rec, metric_key)
+
+
+# ------ 记录级 filter ------
+_FILTER_VALUE_RE = re.compile(
+    r'^\s*([A-Za-z0-9_]+)\s*\.\s*metric_value\s*(<=|>=|==|!=|<|>)\s*(-?\d+(?:\.\d+)?)\s*$'
+)
+_FILTER_RESULT_RE = re.compile(
+    r'^\s*([A-Za-z0-9_]+)\s*\.\s*metric_result\s*:\s*(true|false|0|1)\s*$',
+    flags=re.IGNORECASE,
+)
+_FILTER_OPS = {
+    "<": operator.lt, "<=": operator.le,
+    ">": operator.gt, ">=": operator.ge,
+    "==": operator.eq, "!=": operator.ne,
+}
+
+
+def _compile_record_filter(filter_str):
+    """把 filter 表达式编译为 Callable[[rec], bool]。空/None → 返回 None。"""
+    if not filter_str:
+        return None
+    text = str(filter_str).strip()
+    if not text:
+        return None
+
+    m = _FILTER_VALUE_RE.match(text)
+    if m:
+        key, op_text, num_text = m.group(1), m.group(2), m.group(3)
+        cmp = _FILTER_OPS[op_text]
+        threshold = float(num_text)
+
+        def _f(rec):
+            metric = rec.get("evaluation_result", {}).get(key)
+            if not isinstance(metric, dict) or "metric_value" not in metric:
+                return False
+            v = metric.get("metric_value")
+            if v is None:
+                return False
+            try:
+                return cmp(float(v), threshold)
+            except Exception:
+                return False
+        return _f
+
+    m = _FILTER_RESULT_RE.match(text)
+    if m:
+        key, tgt = m.group(1), m.group(2).lower()
+        target = tgt in ("true", "1")
+
+        def _f(rec):
+            return _metric_result_equals(rec, key, target) > 0.5
+        return _f
+
+    raise ValueError(
+        f"无法解析 filter: {filter_str!r}（支持 '<key>.metric_value <op> <num>' 或 '<key>.metric_result:<bool>'）"
+    )
+
+
 def _parse_metric_expression(expr):
     text = str(expr or "").strip()
     if not text:
@@ -132,22 +244,47 @@ def _parse_metric_expression(expr):
     return terms
 
 
-def _calc_expr_on_record(rec, expr):
+def _calc_expr_on_record(rec, expr, agg_mode="sum"):
     terms = _parse_metric_expression(expr)
     if not terms:
         return 0.0
     value = 0.0
     for sign, metric_key in terms:
-        value += sign * _metric_value(rec, metric_key)
+        value += sign * _record_term_value(rec, metric_key, agg_mode)
+    return value
+
+
+def _calc_expr_value_or_none(rec, expr, agg_mode):
+    """ave 模式专用：任一 term 的 metric_value 缺失/不可解析 → 返回 None；否则返回 float。
+    metric_result:<bool> 模式不视为缺测，沿用计数语义。"""
+    terms = _parse_metric_expression(expr)
+    if not terms:
+        return 0.0
+    if _parse_result_agg(agg_mode) is not None:
+        return _calc_expr_on_record(rec, expr, agg_mode)
+    value = 0.0
+    for sign, metric_key in terms:
+        m = rec.get("evaluation_result", {}).get(metric_key)
+        if not isinstance(m, dict) or "metric_value" not in m:
+            return None
+        raw = m.get("metric_value")
+        if raw is None:
+            return None
+        try:
+            value += sign * float(raw)
+        except Exception:
+            return None
     return value
 
 
 def _aggregate_selected_metric(records, expr, agg_mode):
     if not records:
         return 0.0
-    values = [_calc_expr_on_record(rec, expr) for rec in records]
-    if agg_mode == "ave":
-        return sum(values) / len(values)
+    if str(agg_mode).strip().lower() == "ave":
+        # ave 模式跳过缺测：仅对 metric_value 实际存在的记录求平均
+        values = [v for v in (_calc_expr_value_or_none(r, expr, agg_mode) for r in records) if v is not None]
+        return sum(values) / len(values) if values else 0.0
+    values = [_calc_expr_on_record(r, expr, agg_mode) for r in records]
     return sum(values)
 
 
@@ -175,10 +312,12 @@ def _build_formula_text(agg_mode, numerator_expr, denominator_expr):
     return f"({num_comp})-({num_base})"
 
 
-def _aggregate_stats_from_selected(selected_records, agg_mode, metric_expr):
+def _aggregate_stats_from_selected(selected_records, agg_mode, metric_expr, record_filter=None):
+    """record_filter: 可选 Callable[[rec], bool]，仅影响 metric_sum；count 保留全量。"""
     stats = {}
     for task_id, records in selected_records.items():
-        metric_sum = _aggregate_selected_metric(records, metric_expr, agg_mode)
+        filt_records = [r for r in records if record_filter(r)] if record_filter else records
+        metric_sum = _aggregate_selected_metric(filt_records, metric_expr, agg_mode)
         stats[task_id] = {"count": len(records), "metric_sum": metric_sum, "records": records}
     return stats
 
@@ -186,7 +325,7 @@ def _aggregate_stats_from_selected(selected_records, agg_mode, metric_expr):
 def _feature_configs():
     # 特性配置（数据集检索 / 指标 / 小特性 selector）已抽到 report/configs/hct_report_config.json
     # 通过 config_loader.load_hct_feature_config 加载并预编译，返回结构与历史一致：
-    #   [{name, sql, predicate, primary_result, results, small_feature:{field_sql, extractor}}, ...]
+    #   [{name, sql, predicate, primary_result, results, small_features:[{field_sql, extractor, enabled}, ...]}, ...]
     return load_hct_feature_config()
 
 
@@ -225,6 +364,35 @@ def _format_base_denominators(task_order, base_denominator_stats, use_denominato
     return "/".join(values) if values else "0"
 
 
+def _format_per_version_raw(value, value_format):
+    """单值展示格式：
+    - value_format=='float' 时按 float 保留 3 位（如 score）
+    - 其他（int/%）按 int 展示（如帧数）
+    """
+    fmt = str(value_format or "float").lower()
+    try:
+        v = float(value)
+    except Exception:
+        v = 0.0
+    if fmt == "float":
+        return f"{v:.3f}"
+    return str(int(round(v)))
+
+
+def _format_denominator_column(version_denominator_stats, task_order, use_denominator):
+    """基数(总数)列：百分比指标显示各版本 denominator，'/' 拼接；否则占位 '-'。"""
+    if not use_denominator:
+        return "-"
+    pieces = []
+    for task_id in task_order:
+        den = version_denominator_stats.get(task_id, {}).get("metric_sum", 0)
+        try:
+            pieces.append(f"{int(den)}")
+        except Exception:
+            pieces.append("0")
+    return "/".join(pieces) if pieces else "-"
+
+
 def _build_row(
     data_class,
     sql_text,
@@ -237,6 +405,7 @@ def _build_row(
     stats,
     base_ref_stats,
     base_denominator_stats,
+    version_denominator_stats,
     use_denominator,
     value_format,
 ):
@@ -244,9 +413,36 @@ def _build_row(
     base_sum = stats.get(base_task, {}).get("metric_sum", 0.0)
     ref_task_for_count = task_order[1] if len(task_order) > 1 else base_task
     base_count = base_ref_stats.get(ref_task_for_count, {}).get("count", stats.get(base_task, {}).get("count", 0))
-    row = [data_class, sql_text, base_count, formula_text, result_name, rollback_threshold, optimize_threshold, note]
+    denominator_cell = _format_denominator_column(version_denominator_stats, task_order, use_denominator)
+    row = [
+        data_class,
+        sql_text,
+        base_count,
+        formula_text,
+        result_name,
+        rollback_threshold,
+        optimize_threshold,
+        note,
+        denominator_cell,
+    ]
     for task_id in task_order:
         s = stats.get(task_id, {"count": 0, "metric_sum": 0.0})
+        if task_id == base_task:
+            # base 列：显示「base 全量 (与每个对比版本对齐后的 base 值, '/' 拼接)」
+            # - 全量值放在括号外，作为参考基准
+            # - 括号内每段对应一个对比版本，便于核对 A 列 = aligned_base + diff
+            base_full = _format_per_version_raw(s.get("metric_sum", 0.0), value_format)
+            compare_tasks = task_order[1:]
+            aligned_pieces = []
+            for cmp_task in compare_tasks:
+                aligned_base = base_ref_stats.get(cmp_task, {"metric_sum": base_sum}).get("metric_sum", 0.0)
+                aligned_pieces.append(_format_per_version_raw(aligned_base, value_format))
+            if aligned_pieces:
+                row.append(f"{base_full}({'/'.join(aligned_pieces)})")
+            else:
+                row.append(base_full)
+            continue
+        version_value = _format_per_version_raw(s.get("metric_sum", 0.0), value_format)
         base_ref = base_ref_stats.get(task_id, {"metric_sum": base_sum})
         base_den = base_denominator_stats.get(task_id, {"metric_sum": 0.0})
         diff = _format_diff(
@@ -255,11 +451,7 @@ def _build_row(
             use_denominator,
             value_format,
         )
-        if task_id == base_task:
-            cell = _format_base_denominators(task_order, base_denominator_stats, use_denominator)
-        else:
-            cell = f"{diff}"
-        row.append(cell)
+        row.append(f"{version_value}({diff})")
     return row
 
 
@@ -274,36 +466,62 @@ def _init_task_stats(task_ids):
     return {task_id: {"count": 0, "metric_sum": 0.0} for task_id in task_ids}
 
 
-def _aggregate_small_feature_stats(records_by_task, extractor, agg_mode, metric_expr, task_ids):
+def _aggregate_small_feature_stats(records_by_task, extractor, agg_mode, metric_expr, task_ids, record_filter=None):
     """
     单次遍历聚合小特性统计：
     - value_stats[value][task_id] = {"count", "metric_sum"}
     - other_stats[task_id] = {"count", "metric_sum"}  # extractor 无值时归档
+    注：
+    - 按 records_by_task 的 dict key 迭代，避免 task_ids 列表中存在重复 id 时双倍累加。
+    - ave 模式跳过 metric_value 缺测的记录：count 仍计入（用于"数量"列），
+      但 valid_count 只统计非缺测；归一化用 valid_count，与离线一致。
+    - record_filter: 可选 Callable[[rec], bool]。未通过 filter 的记录仅计入 count，
+      不参与 metric_sum/valid_count。
     """
     value_stats = {}
     other_stats = _init_task_stats(task_ids)
-    for task_id in task_ids:
-        for rec in records_by_task[task_id]:
-            metric_val = _calc_expr_on_record(rec, metric_expr)
+    is_ave = str(agg_mode).strip().lower() == "ave"
+
+    def _accum(target, metric_val, valid):
+        target["count"] += 1
+        if is_ave:
+            if valid:
+                target["metric_sum"] += metric_val
+                target["valid_count"] = target.get("valid_count", 0) + 1
+        else:
+            target["metric_sum"] += metric_val
+
+    for task_id, recs in records_by_task.items():
+        for rec in recs:
+            passes = record_filter(rec) if record_filter else True
+            if not passes:
+                # 不通过 filter 的记录：仅 count，不进 metric_sum / valid_count
+                valid = False
+                metric_val = 0.0
+            elif is_ave:
+                opt = _calc_expr_value_or_none(rec, metric_expr, agg_mode)
+                valid = opt is not None
+                metric_val = opt if valid else 0.0
+            else:
+                metric_val = _calc_expr_on_record(rec, metric_expr, agg_mode)
+                valid = True
             raw_values = extractor(rec.get("meta", {}))
             values = sorted({v for v in raw_values if v})
             if not values:
-                other_stats[task_id]["count"] += 1
-                other_stats[task_id]["metric_sum"] += metric_val
+                _accum(other_stats[task_id], metric_val, valid)
                 continue
             for value in values:
                 if value not in value_stats:
                     value_stats[value] = _init_task_stats(task_ids)
-                value_stats[value][task_id]["count"] += 1
-                value_stats[value][task_id]["metric_sum"] += metric_val
-    if agg_mode == "ave":
+                _accum(value_stats[value][task_id], metric_val, valid)
+    if is_ave:
         for stats in value_stats.values():
-            for task_id in task_ids:
-                cnt = stats[task_id]["count"]
-                stats[task_id]["metric_sum"] = (stats[task_id]["metric_sum"] / cnt) if cnt else 0.0
-        for task_id in task_ids:
-            cnt = other_stats[task_id]["count"]
-            other_stats[task_id]["metric_sum"] = (other_stats[task_id]["metric_sum"] / cnt) if cnt else 0.0
+            for tid in stats:
+                vc = stats[tid].get("valid_count", 0)
+                stats[tid]["metric_sum"] = (stats[tid]["metric_sum"] / vc) if vc else 0.0
+        for tid in other_stats:
+            vc = other_stats[tid].get("valid_count", 0)
+            other_stats[tid]["metric_sum"] = (other_stats[tid]["metric_sum"] / vc) if vc else 0.0
     return value_stats, other_stats
 
 
@@ -325,33 +543,58 @@ def _stats_or_default(stats_map, key, task_ids):
     return stats_map.get(key, _init_task_stats(task_ids))
 
 
-def _build_result_bundle(selected_records, base_selected_records, extractor, result_item, task_ids):
+def _build_result_bundle(selected_records, base_selected_records, small_features, result_item, task_ids):
+    """small_features: 列表，每项 {field_sql, extractor, enabled}。
+    返回 bundle 中 small_stats 为同长度列表，按下标对应每个小特性。"""
     agg_mode = result_item["agg"]
     numerator_expr = result_item["numerator"]
     denominator_expr = result_item.get("denominator")
     use_denominator = bool(denominator_expr)
     value_format = result_item.get("value_format", "%" if use_denominator else "float")
+    record_filter = _compile_record_filter(result_item.get("filter"))
 
-    stats = _aggregate_stats_from_selected(selected_records, agg_mode, numerator_expr)
-    base_ref_stats = _aggregate_stats_from_selected(base_selected_records, agg_mode, numerator_expr)
+    stats = _aggregate_stats_from_selected(selected_records, agg_mode, numerator_expr, record_filter)
+    base_ref_stats = _aggregate_stats_from_selected(base_selected_records, agg_mode, numerator_expr, record_filter)
     if use_denominator:
-        base_denominator_stats = _aggregate_stats_from_selected(base_selected_records, agg_mode, denominator_expr)
+        base_denominator_stats = _aggregate_stats_from_selected(base_selected_records, agg_mode, denominator_expr, record_filter)
+        version_denominator_stats = _aggregate_stats_from_selected(selected_records, agg_mode, denominator_expr, record_filter)
     else:
         base_denominator_stats = _init_task_stats(task_ids)
+        version_denominator_stats = _init_task_stats(task_ids)
 
-    value_stats, other_stats = _aggregate_small_feature_stats(
-        selected_records, extractor, agg_mode, numerator_expr, task_ids
-    )
-    base_value_stats, base_other_stats = _aggregate_small_feature_stats(
-        base_selected_records, extractor, agg_mode, numerator_expr, task_ids
-    )
-    if use_denominator:
-        base_value_den_stats, base_other_den_stats = _aggregate_small_feature_stats(
-            base_selected_records, extractor, agg_mode, denominator_expr, task_ids
+    small_stats_list = []
+    for sf in small_features:
+        ex = sf["extractor"]
+        value_stats, other_stats = _aggregate_small_feature_stats(
+            selected_records, ex, agg_mode, numerator_expr, task_ids, record_filter
         )
-    else:
-        base_value_den_stats = {}
-        base_other_den_stats = _init_task_stats(task_ids)
+        base_value_stats, base_other_stats = _aggregate_small_feature_stats(
+            base_selected_records, ex, agg_mode, numerator_expr, task_ids, record_filter
+        )
+        if use_denominator:
+            base_value_den_stats, base_other_den_stats = _aggregate_small_feature_stats(
+                base_selected_records, ex, agg_mode, denominator_expr, task_ids, record_filter
+            )
+            version_value_den_stats, version_other_den_stats = _aggregate_small_feature_stats(
+                selected_records, ex, agg_mode, denominator_expr, task_ids, record_filter
+            )
+        else:
+            base_value_den_stats = {}
+            base_other_den_stats = _init_task_stats(task_ids)
+            version_value_den_stats = {}
+            version_other_den_stats = _init_task_stats(task_ids)
+        small_stats_list.append({
+            "field_sql": sf.get("field_sql", ""),
+            "enabled": sf.get("enabled", True),
+            "value_stats": value_stats,
+            "other_stats": other_stats,
+            "base_value_stats": base_value_stats,
+            "base_other_stats": base_other_stats,
+            "base_value_den_stats": base_value_den_stats,
+            "base_other_den_stats": base_other_den_stats,
+            "version_value_den_stats": version_value_den_stats,
+            "version_other_den_stats": version_other_den_stats,
+        })
 
     return {
         "result_item": result_item,
@@ -361,12 +604,8 @@ def _build_result_bundle(selected_records, base_selected_records, extractor, res
         "stats": stats,
         "base_ref_stats": base_ref_stats,
         "base_denominator_stats": base_denominator_stats,
-        "value_stats": value_stats,
-        "other_stats": other_stats,
-        "base_value_stats": base_value_stats,
-        "base_other_stats": base_other_stats,
-        "base_value_den_stats": base_value_den_stats,
-        "base_other_den_stats": base_other_den_stats,
+        "version_denominator_stats": version_denominator_stats,
+        "small_stats": small_stats_list,
     }
 
 
@@ -415,8 +654,11 @@ def _apply_threshold_coloring(ws, rollback_col=5, optimize_col=6, first_result_c
             raw = ws.cell(row=row_idx, column=col_idx).value
             if raw is None or raw == "":
                 continue
+            # 单元格格式为 "value(diff)"，着色依据为括号内的 diff
+            m = re.search(r"\(([^)]+)\)", str(raw))
+            inner = m.group(1) if m else str(raw)
             try:
-                column_value = float(str(raw).replace("%", "").replace("=", "").strip())
+                column_value = float(inner.replace("%", "").replace("=", "").strip())
             except Exception:
                 continue
 
@@ -552,7 +794,7 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
                 task_order_for_rank.append(task_id)
         versions = _normalize_ver_map(ver_map, len(task_ids))
         header_task_ver = [f"{v}({t})" for v, t in zip(versions, task_ids)]
-        header = ["数据分类", "Sql语句", "数量", "分析逻辑", "评测内容", "回退阈值", "优秀阈值", "注释"] + header_task_ver
+        header = ["数据分类", "Sql语句", "数量", "分析逻辑", "评测内容", "回退阈值", "优秀阈值", "注释", "基数(总数)"] + header_task_ver
         all_rows.append(header)
         merge_ranges = []
         major_feature_row_idx = set()
@@ -564,11 +806,18 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
         for feature in feature_configs:
             selected_records = _select_records_by_predicate(task_records, feature["predicate"])
             base_selected_records = _select_records_by_predicate(base_ref_records, feature["predicate"])
+            # 数据集检索命中为 0：跳过整个特性，不写入任何行
+            total_hits = sum(len(recs) for recs in selected_records.values()) + sum(
+                len(recs) for recs in base_selected_records.values()
+            )
+            if total_hits == 0:
+                continue
+            small_features = feature["small_features"]
             result_bundles = [
                 _build_result_bundle(
                     selected_records=selected_records,
                     base_selected_records=base_selected_records,
-                    extractor=feature["small_feature"]["extractor"],
+                    small_features=small_features,
                     result_item=result_item,
                     task_ids=task_ids,
                 )
@@ -598,6 +847,7 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
                         bundle["stats"],
                         bundle["base_ref_stats"],
                         bundle["base_denominator_stats"],
+                        bundle["version_denominator_stats"],
                         bundle["use_denominator"],
                         bundle["value_format"],
                     )
@@ -605,71 +855,80 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
                 next_row_idx += 1
             merge_ranges.append((feature_start_row, next_row_idx - 1))
 
-            field_sql = feature["small_feature"]["field_sql"]
-            primary_value_stats = primary_bundle["value_stats"]
-            primary_other_stats = primary_bundle["other_stats"]
+            # 遍历每个小特性：分别渲染 value 行 + --other 行
+            for sf_idx, sf_cfg in enumerate(small_features):
+                if not sf_cfg.get("enabled", True):
+                    continue
+                field_sql = sf_cfg.get("field_sql", "")
+                primary_small = primary_bundle["small_stats"][sf_idx]
+                primary_value_stats = primary_small["value_stats"]
+                primary_other_stats = primary_small["other_stats"]
 
-            # 小特性按命中规模从大到小排序（总命中数量降序）
-            value_order = sorted(
-                primary_value_stats.keys(),
-                key=lambda value: (-_sum_counts(primary_value_stats[value]), value),
-            )
-
-            for value in value_order:
-                for task_id in task_ids:
-                    metric_sum = primary_value_stats[value][task_id]["metric_sum"]
-                    tag_all_metric_sums["DT_HCT"][f'{feature["name"]}|{field_sql}|{value}'][task_id] = float(metric_sum)
-                small_start_row = next_row_idx
-                for idx, bundle in enumerate(result_bundles):
-                    result_item = bundle["result_item"]
-                    all_rows.append(
-                        _build_row(
-                            f"--{value}" if idx == 0 else "",
-                            f'{field_sql} = "{value}"' if idx == 0 else "",
-                            bundle["formula_text"],
-                            result_item["name"],
-                            result_item["note"],
-                            result_item["rollback_threshold"],
-                            result_item["optimize_threshold"],
-                            task_ids,
-                            _stats_or_default(bundle["value_stats"], value, task_ids),
-                            _stats_or_default(bundle["base_value_stats"], value, task_ids),
-                            _stats_or_default(bundle["base_value_den_stats"], value, task_ids),
-                            bundle["use_denominator"],
-                            bundle["value_format"],
-                        )
-                    )
-                    next_row_idx += 1
-                merge_ranges.append((small_start_row, next_row_idx - 1))
-
-            # 未命中小特性字段的 case 统一归档到 --other
-            for task_id in task_ids:
-                tag_all_metric_sums["DT_HCT"][f'{feature["name"]}|{field_sql}|other'][task_id] = float(
-                    primary_other_stats[task_id]["metric_sum"]
+                # 小特性按命中规模从大到小排序（总命中数量降序）
+                value_order = sorted(
+                    primary_value_stats.keys(),
+                    key=lambda value: (-_sum_counts(primary_value_stats[value]), value),
                 )
-            if _sum_counts(primary_other_stats) > 0:
-                other_start_row = next_row_idx
-                for idx, bundle in enumerate(result_bundles):
-                    result_item = bundle["result_item"]
-                    all_rows.append(
-                        _build_row(
-                            "--other" if idx == 0 else "",
-                            f'{field_sql} = "other"' if idx == 0 else "",
-                            bundle["formula_text"],
-                            result_item["name"],
-                            result_item["note"],
-                            result_item["rollback_threshold"],
-                            result_item["optimize_threshold"],
-                            task_ids,
-                            bundle["other_stats"],
-                            bundle["base_other_stats"],
-                            bundle["base_other_den_stats"],
-                            bundle["use_denominator"],
-                            bundle["value_format"],
+
+                for value in value_order:
+                    for task_id in task_ids:
+                        metric_sum = primary_value_stats[value][task_id]["metric_sum"]
+                        tag_all_metric_sums["DT_HCT"][f'{feature["name"]}|{field_sql}|{value}'][task_id] = float(metric_sum)
+                    small_start_row = next_row_idx
+                    for idx, bundle in enumerate(result_bundles):
+                        result_item = bundle["result_item"]
+                        small = bundle["small_stats"][sf_idx]
+                        all_rows.append(
+                            _build_row(
+                                f"--{value}" if idx == 0 else "",
+                                f'{field_sql} = "{value}"' if idx == 0 else "",
+                                bundle["formula_text"],
+                                result_item["name"],
+                                result_item["note"],
+                                result_item["rollback_threshold"],
+                                result_item["optimize_threshold"],
+                                task_ids,
+                                _stats_or_default(small["value_stats"], value, task_ids),
+                                _stats_or_default(small["base_value_stats"], value, task_ids),
+                                _stats_or_default(small["base_value_den_stats"], value, task_ids),
+                                _stats_or_default(small["version_value_den_stats"], value, task_ids),
+                                bundle["use_denominator"],
+                                bundle["value_format"],
+                            )
                         )
+                        next_row_idx += 1
+                    merge_ranges.append((small_start_row, next_row_idx - 1))
+
+                # 未命中小特性字段的 case 统一归档到 --other
+                for task_id in task_ids:
+                    tag_all_metric_sums["DT_HCT"][f'{feature["name"]}|{field_sql}|other'][task_id] = float(
+                        primary_other_stats[task_id]["metric_sum"]
                     )
-                    next_row_idx += 1
-                merge_ranges.append((other_start_row, next_row_idx - 1))
+                if _sum_counts(primary_other_stats) > 0:
+                    other_start_row = next_row_idx
+                    for idx, bundle in enumerate(result_bundles):
+                        result_item = bundle["result_item"]
+                        small = bundle["small_stats"][sf_idx]
+                        all_rows.append(
+                            _build_row(
+                                "--other" if idx == 0 else "",
+                                f'{field_sql} = "other"' if idx == 0 else "",
+                                bundle["formula_text"],
+                                result_item["name"],
+                                result_item["note"],
+                                result_item["rollback_threshold"],
+                                result_item["optimize_threshold"],
+                                task_ids,
+                                small["other_stats"],
+                                small["base_other_stats"],
+                                small["base_other_den_stats"],
+                                small["version_other_den_stats"],
+                                bundle["use_denominator"],
+                                bundle["value_format"],
+                            )
+                        )
+                        next_row_idx += 1
+                    merge_ranges.append((other_start_row, next_row_idx - 1))
 
         for row in all_rows:
             ws.append(row)
@@ -700,8 +959,10 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
         ws.column_dimensions["F"].width = 8
         ws.column_dimensions["G"].width = 8
         ws.column_dimensions["H"].width = 10
-        ws.column_dimensions["I"].width = 15
-        _apply_threshold_coloring(ws, rollback_col=6, optimize_col=7, first_result_col=9)
+        ws.column_dimensions["I"].width = 20
+        ws.column_dimensions["J"].width = 15
+        # 基线列是参考列（数量/分母），不参与着色；从 base 之后的对比列开始
+        _apply_threshold_coloring(ws, rollback_col=6, optimize_col=7, first_result_col=11)
 
     if not has_written_sheet:
         ws_default.title = _safe_sheet_title("DT_HCT", used_sheet_names)
@@ -741,7 +1002,7 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
 if __name__ == "__main__":
     import time
     ver_map = ["base", "A", "B", "C"]
-    tasks_dict = {"tmp":[886358, 886416, 886398, 886621]}
+    tasks_dict = {"tmp":[1193157, 1193159, 1197924]}
     file_name_suffix = time.strftime("%Y%m%d%H%M%S", time.localtime())  
     msg, xlsx_path, txt_path, all_ver_com, tag_lv1_ver_com, tag_all_ver_com = run_compare_hct(tasks_dict, ver_map, "", file_name_suffix)
 
