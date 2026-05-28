@@ -1,0 +1,5 @@
+.vscode/
+outputs/
+output_hct_*
+task_*
+*.pyc

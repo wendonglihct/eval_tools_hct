@@ -2,6 +2,7 @@ import lark_oapi as lark
 from lark_oapi.api.im.v1 import *
 from lark_oapi.api.drive.v1 import *
 from lark_oapi.api.wiki.v2 import *
+from lark_oapi.api.contact.v3 import *
 import json
 import os
 import re
@@ -189,6 +190,41 @@ def make_card(sheet_url):
     return json.dumps(data, ensure_ascii=False)
 
 
+# 文件名安全字符正则：保留中英文/数字/下划线/点；其他统一替换为 _
+_FILENAME_UNSAFE_RE = re.compile(r"[^\w.\u4e00-\u9fff]+")
+
+
+def _safe_filename_part(text: str, fallback: str = "unknown") -> str:
+    """把任意字符串转成安全的文件名片段（去掉 / \\ : * ? " < > | 等）。"""
+    t = _FILENAME_UNSAFE_RE.sub("_", str(text or "")).strip("_")
+    return t if t else fallback
+
+
+def get_user_name(open_id: str) -> str:
+    """根据 open_id 查询飞书用户名。失败时返回 'unknown'。"""
+    if not open_id:
+        return "unknown"
+    try:
+        request = (
+            GetUserRequest.builder()
+            .user_id(open_id)
+            .user_id_type("open_id")
+            .build()
+        )
+        response = client.contact.v3.user.get(request)
+        if not response.success():
+            logger.warning(
+                f"get user name failed: code={response.code}, msg={response.msg}, "
+                f"log_id={response.get_log_id()}"
+            )
+            return "unknown"
+        name = getattr(response.data.user, "name", None)
+        return name or "unknown"
+    except Exception as e:
+        logger.exception(f"get_user_name 异常: {e}")
+        return "unknown"
+
+
 def process_message_async(data: P2ImMessageReceiveV1, res_content: str):
     """
     耗时任务：解析消息、跑 HCT 对比、上传文件、发消息
@@ -206,8 +242,17 @@ def process_message_async(data: P2ImMessageReceiveV1, res_content: str):
         msg, xlsx_path, txt_path, all_ver_com, tag_lv1_ver_com, tag_all_ver_com = run_compare_hct(
             tasks_dict, ver_map, msg, file_name_suffix
         )
-        xlsx_token = upload_file(xlsx_path, f"DT多版本评测结果_hct_{file_name_suffix}.xlsx", te_token)
-        feish_sheet_token = transfer_sheet_to_feishu_sheet(xlsx_token, f"DT多版本评测结果_hct_{file_name_suffix}.xlsx")
+
+        # 取发送者 open_id → 用户名 → 拼入文件名
+        sender = getattr(data.event, "sender", None)
+        sender_id = getattr(sender, "sender_id", None) if sender else None
+        open_id = getattr(sender_id, "open_id", None) if sender_id else None
+        user_name = _safe_filename_part(get_user_name(open_id))
+        feishu_file_name = f"DT多版本评测结果_hct_{user_name}_{file_name_suffix}.xlsx"
+        logger.info(f"飞书文件名: {feishu_file_name}  (user={user_name}, open_id={open_id})")
+
+        xlsx_token = upload_file(xlsx_path, feishu_file_name, te_token)
+        feish_sheet_token = transfer_sheet_to_feishu_sheet(xlsx_token, feishu_file_name)
         sheet_url = move_file_to_wiki(feish_sheet_token, "sheet")
 
         # 生成卡片内容
