@@ -48,7 +48,7 @@ def _normalize_ver_map(ver_map, target_len):
         q = idx
         label = ""
         while True:
-            label = chr(ord("A") + (q % 26)) + label
+            label = chr(ord("M") + (q % 26)) + label
             q = q // 26 - 1
             if q < 0:
                 break
