@@ -12,7 +12,7 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from report.config_loader import load_hct_feature_config
+from report.config_loader import load_hct_feature_config, get_config_path
 
 
 PASS_STATUS = {"Pass", "EVAL FAIL"}
@@ -322,11 +322,25 @@ def _aggregate_stats_from_selected(selected_records, agg_mode, metric_expr, reco
     return stats
 
 
-def _feature_configs():
-    # 特性配置（数据集检索 / 指标 / 小特性 selector）已抽到 report/configs/hct_report_config.json
-    # 通过 config_loader.load_hct_feature_config 加载并预编译，返回结构与历史一致：
-    #   [{name, sql, predicate, primary_result, results, small_features:[{field_sql, extractor, enabled}, ...]}, ...]
-    return load_hct_feature_config()
+def _feature_configs(mode=None):
+    """按 mode 选择 configs/ 目录下的配置文件并加载。
+    - 当前 DT_HCT → hct_report_config.json
+    - 其他 mode（含 None） → 暂时回退到 hct_report_config.json
+    新 mode 落地时只需在 MODE_CONFIG_MAP 中追加映射。
+    返回结构：
+      [{name, sql, predicate, primary_result, results,
+        small_features:[{field_sql, extractor, enabled}, ...]}, ...]
+    """
+    name = MODE_CONFIG_MAP.get(mode or "", DEFAULT_CONFIG_FILE)
+    return load_hct_feature_config(get_config_path(name))
+
+
+# mode → configs/ 下的 JSON 文件名映射；未命中走 DEFAULT_CONFIG_FILE
+DEFAULT_CONFIG_FILE = "hct_report_config.json"
+MODE_CONFIG_MAP = {
+    "DT_HCT": "hct_report_config.json",
+    # 例: "DT_HCT_close": "hct_report_close_config.json",
+}
 
 
 def _format_value(value, value_format):
@@ -766,7 +780,7 @@ def _safe_sheet_title(raw_name, used_names):
     return title
 
 
-def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
+def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix, mode="DT_HCT"):
     wb = Workbook()
     ws_default = wb.active
     used_sheet_names = set()
@@ -776,7 +790,7 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix):
     tag_lv1_metric_sums = defaultdict(lambda: defaultdict(float))
     tag_all_metric_sums = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
     task_order_for_rank = []
-    feature_configs = _feature_configs()
+    feature_configs = _feature_configs(mode)
     major_feature_names = {f["name"] for f in feature_configs}
     for compare_key, task_ids in tasks_dict.items():
         all_rows = []

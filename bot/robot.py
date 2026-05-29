@@ -225,108 +225,130 @@ def get_user_name(open_id: str) -> str:
         return "unknown"
 
 
+def _send_text(data: P2ImMessageReceiveV1, text: str):
+    """统一的纯文本回复（p2p / 群聊自动分发）。"""
+    content = json.dumps({"text": text})
+    if data.event.message.chat_type == "p2p":
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(data.event.message.chat_id)
+                .uuid(data.header.event_id)
+                .msg_type("text")
+                .content(content)
+                .build()
+            )
+            .build()
+        )
+        return client.im.v1.message.create(request)
+    request = (
+        ReplyMessageRequest.builder()
+        .message_id(data.event.message.message_id)
+        .request_body(
+            ReplyMessageRequestBody.builder()
+            .content(content)
+            .msg_type("text")
+            .build()
+        )
+        .build()
+    )
+    return client.im.v1.message.reply(request)
+
+
+def _send_card(data: P2ImMessageReceiveV1, content: str):
+    """统一的卡片回复（p2p / 群聊自动分发）。content 必须是 json string。"""
+    if data.event.message.chat_type == "p2p":
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type("chat_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(data.event.message.chat_id)
+                .uuid(data.header.event_id)
+                .msg_type("interactive")
+                .content(content)
+                .build()
+            )
+            .build()
+        )
+        return client.im.v1.message.create(request)
+    request = (
+        ReplyMessageRequest.builder()
+        .message_id(data.event.message.message_id)
+        .request_body(
+            ReplyMessageRequestBody.builder()
+            .content(content)
+            .msg_type("interactive")
+            .build()
+        )
+        .build()
+    )
+    return client.im.v1.message.reply(request)
+
+
+# 已知但尚未实现的 mode，命中后返回「功能暂未实现」提示
+PENDING_MODES = {"DT_HCT_CLOSE"}
+
+
+def _run_dt_hct(data: P2ImMessageReceiveV1, tasks_dict, ver_map, mode):
+    """DT_HCT 主流程：下载 → 对比 → 上传 → 转 sheet → 入 wiki → 卡片回复。
+    mode 透传到 run_compare_hct，由其按 mode 选择 configs 下的 JSON。"""
+    te_token, _ = get_tenant_access_token(APP_ID, APP_SECRET)
+
+    file_name_suffix = time.strftime("%Y%m%d%H%M%S", time.localtime())
+    msg = ""
+    msg, xlsx_path, txt_path, all_ver_com, tag_lv1_ver_com, tag_all_ver_com = run_compare_hct(
+        tasks_dict, ver_map, msg, file_name_suffix, mode
+    )
+
+    # 取发送者 open_id → 用户名 → 拼入文件名
+    sender = getattr(data.event, "sender", None)
+    sender_id = getattr(sender, "sender_id", None) if sender else None
+    open_id = getattr(sender_id, "open_id", None) if sender_id else None
+    user_name = _safe_filename_part(get_user_name(open_id))
+    feishu_file_name = f"DT多版本评测结果_hct_{user_name}_{file_name_suffix}.xlsx"
+    logger.info(f"飞书文件名: {feishu_file_name}  (user={user_name}, open_id={open_id})")
+
+    xlsx_token = upload_file(xlsx_path, feishu_file_name, te_token)
+    feish_sheet_token = transfer_sheet_to_feishu_sheet(xlsx_token, feishu_file_name)
+    sheet_url = move_file_to_wiki(feish_sheet_token, "sheet")
+
+    response = _send_card(data, make_card(sheet_url))
+    if not response.success():
+        raise Exception(f"消息发送失败: {response.code}, {response.msg}, log_id: {response.get_log_id()}")
+
+
 def process_message_async(data: P2ImMessageReceiveV1, res_content: str):
     """
-    耗时任务：解析消息、跑 HCT 对比、上传文件、发消息
+    耗时任务：解析消息并按 mode 分发。
+    - DT_HCT       → 运行 hct 报告流程
+    - PENDING_MODES → 返回「功能暂未实现」
+    - 其他          → 返回「mode 输入错误，暂不支持该值」
     """
     try:
-        te_token, _ = get_tenant_access_token(APP_ID, APP_SECRET)
-
         logger.info(f"输入内容：{res_content}")
         tasks_dict, ver_map, mode = parse_res_content(res_content)
-        if mode != "DT_HCT":
-            raise ValueError(f"仅支持 mode=DT_HCT，收到: {mode}")
 
-        file_name_suffix = time.strftime("%Y%m%d%H%M%S", time.localtime())
-        msg = ""
-        msg, xlsx_path, txt_path, all_ver_com, tag_lv1_ver_com, tag_all_ver_com = run_compare_hct(
-            tasks_dict, ver_map, msg, file_name_suffix
-        )
-
-        # 取发送者 open_id → 用户名 → 拼入文件名
-        sender = getattr(data.event, "sender", None)
-        sender_id = getattr(sender, "sender_id", None) if sender else None
-        open_id = getattr(sender_id, "open_id", None) if sender_id else None
-        user_name = _safe_filename_part(get_user_name(open_id))
-        feishu_file_name = f"DT多版本评测结果_hct_{user_name}_{file_name_suffix}.xlsx"
-        logger.info(f"飞书文件名: {feishu_file_name}  (user={user_name}, open_id={open_id})")
-
-        xlsx_token = upload_file(xlsx_path, feishu_file_name, te_token)
-        feish_sheet_token = transfer_sheet_to_feishu_sheet(xlsx_token, feishu_file_name)
-        sheet_url = move_file_to_wiki(feish_sheet_token, "sheet")
-
-        # 生成卡片内容
-        content = make_card(sheet_url)
-
-        # 回复消息（p2p 或 群聊）
-        if data.event.message.chat_type == "p2p":
-            request = (
-                CreateMessageRequest.builder()
-                .receive_id_type("chat_id")
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(data.event.message.chat_id)
-                    .uuid(data.header.event_id)
-                    .msg_type("interactive")
-                    .content(content)
-                    .build()
-                )
-                .build()
-            )
-            response = client.im.v1.message.create(request)
+        if mode.upper() in ["DT_HCT", "DT_HCT_OPEN"]:
+            _run_dt_hct(data, tasks_dict, ver_map, mode)
+        elif mode.upper() in PENDING_MODES:
+            logger.info(f"mode={mode} 功能暂未实现")
+            _send_text(data, f"功能暂未实现：mode={mode}")
         else:
-            request = (
-                ReplyMessageRequest.builder()
-                .message_id(data.event.message.message_id)
-                .request_body(
-                    ReplyMessageRequestBody.builder()
-                    .content(content)
-                    .msg_type("interactive")
-                    .build()
-                )
-                .build()
+            logger.warning(f"mode={mode} 不在支持列表中")
+            supported = ["DT_HCT"] + sorted(PENDING_MODES)
+            _send_text(
+                data,
+                f"mode 输入错误，暂不支持该值：{mode}\n当前已支持：{supported}"
             )
-            response = client.im.v1.message.reply(request)
-
-        if not response.success():
-            raise Exception(f"消息发送失败: {response.code}, {response.msg}, log_id: {response.get_log_id()}")
-
     except Exception as e:
-        content = json.dumps(
-                {
-                    "text": "评测对比任务失败" + str(e)
-                }
-        )
-        if data.event.message.chat_type == "p2p":
-            request = (
-                CreateMessageRequest.builder()
-                .receive_id_type("chat_id")
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(data.event.message.chat_id)
-                    .uuid(data.header.event_id)
-                    .msg_type("text")
-                    .content(content)
-                    .build()
-                )
-                .build()
-            )
-            response = client.im.v1.message.create(request)
-        else:
-            request = (
-                ReplyMessageRequest.builder()
-                .message_id(data.event.message.message_id)
-                .request_body(
-                    ReplyMessageRequestBody.builder()
-                    .content(content)
-                    .msg_type("text")
-                    .build()
-                )
-                .build()
-            )
-            response = client.im.v1.message.reply(request)
-        if not response.success():
-            raise Exception(f"消息发送失败: {response.code}, {response.msg}, log_id: {response.get_log_id()}")
+        logger.exception("处理消息失败")
+        try:
+            _send_text(data, f"评测对比任务失败：{e}")
+        except Exception:
+            logger.exception("回复异常消息失败")
 
 
 def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
