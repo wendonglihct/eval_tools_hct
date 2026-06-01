@@ -16,7 +16,20 @@ import ast
 import json
 import os
 import re
+import sys
 from typing import Any, Callable, Dict, List
+
+# 允许直接被 report/hct_report.py 之外的入口加载
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from utils.paths import CONFIG_DIR, MODE_ROUTING_FILE, config_path as get_config_path  # noqa: F401
+
+
+# 未启用 / 占位小特性使用的零开销 extractor（避免每次 load 时新建 lambda）
+def _EMPTY_EXTRACTOR(_meta):
+    return []
 
 
 # -------------------- 路径取值 --------------------
@@ -137,52 +150,65 @@ def _safe_eval_bool(expr: str) -> bool:
 
 
 def compile_query(query: str) -> Callable[[dict], bool]:
-    """把 KQL 风格 query 编译为 predicate(meta)->bool。"""
+    """把 KQL 风格 query 编译为 predicate(meta)->bool。
+
+    DSL 算子集中在 _DSL_PATTERNS 表里：每项 (pattern, match_factory)。
+    - 静态校验阶段：所有匹配替换为 True，剩余应只剩 bool 词
+    - 运行期：每条匹配按 match_factory(meta) 求值后替换为 True/False
+    新增算子只需在表里追加一项，编译器逻辑无需改动。
+    """
     text = str(query or "").strip()
     if not text:
         raise ValueError("数据集检索为空")
 
-    # 静态校验：把所有条件替换为 True 后，剩下的应只能是 bool 逻辑
-    check = re.sub(r"\bAND\b", "and", text, flags=re.IGNORECASE)
-    check = re.sub(r"\bOR\b", "or", check, flags=re.IGNORECASE)
-    check = re.sub(r"\bNOT\b", "not", check, flags=re.IGNORECASE)
-    check = _IN_PATTERN.sub("True", check)
-    check = _COND_PATTERN.sub("True", check)
-    check = _WILDCARD_PATTERN.sub("True", check)
+    def _normalize_keywords(s: str) -> str:
+        s = re.sub(r"\bAND\b", "and", s, flags=re.IGNORECASE)
+        s = re.sub(r"\bOR\b", "or", s, flags=re.IGNORECASE)
+        s = re.sub(r"\bNOT\b", "not", s, flags=re.IGNORECASE)
+        return s
+
+    # 静态校验
+    check = _normalize_keywords(text)
+    for pattern, _ in _DSL_PATTERNS:
+        check = pattern.sub("True", check)
     residue = re.sub(r"\b(True|False|and|or|not)\b", "", check).replace("(", "").replace(")", "").strip()
     if residue:
         raise ValueError(f"数据集检索存在无法解析的内容: {residue}")
 
     def predicate(meta: dict) -> bool:
-        expr = text
-        expr = re.sub(r"\bAND\b", "and", expr, flags=re.IGNORECASE)
-        expr = re.sub(r"\bOR\b", "or", expr, flags=re.IGNORECASE)
-        expr = re.sub(r"\bNOT\b", "not", expr, flags=re.IGNORECASE)
-        expr = _IN_PATTERN.sub(
-            lambda m: "True" if _match_in(meta, m.group(1), _parse_in_values(m.group(2))) else "False",
-            expr,
-        )
-        expr = _COND_PATTERN.sub(
-            lambda m: "True" if _match_cond(meta, m.group(1), m.group(2)) else "False",
-            expr,
-        )
-        expr = _WILDCARD_PATTERN.sub(
-            lambda m: "True" if _match_wildcard(meta, m.group(1)) else "False",
-            expr,
-        )
+        expr = _normalize_keywords(text)
+        for pattern, factory in _DSL_PATTERNS:
+            expr = pattern.sub(lambda m, _f=factory: "True" if _f(meta, m) else "False", expr)
         return _safe_eval_bool(expr)
 
     return predicate
 
 
+# DSL 算子表：(正则, 匹配函数)
+# - 匹配函数签名 (meta: dict, m: re.Match) -> bool
+# - 顺序决定优先级；如有重叠应把更严格的放前面
+_DSL_PATTERNS = [
+    (_IN_PATTERN,       lambda meta, m: _match_in(meta, m.group(1), _parse_in_values(m.group(2)))),
+    (_COND_PATTERN,     lambda meta, m: _match_cond(meta, m.group(1), m.group(2))),
+    (_WILDCARD_PATTERN, lambda meta, m: _match_wildcard(meta, m.group(1))),
+]
+
+
 # -------------------- 配置加载 --------------------
+# CONFIG_DIR / MODE_ROUTING_FILE / get_config_path 由 utils.paths 提供（顶部 import）
 
-CONFIG_DIR = os.path.join(os.path.dirname(__file__), "configs")
 
-
-def get_config_path(name: str) -> str:
-    """按名称定位 configs 目录下的 JSON 配置。"""
-    return os.path.join(CONFIG_DIR, name)
+def load_mode_routing(json_path: str = None) -> Dict[str, Any]:
+    """加载 modes.json：
+    {
+      "default_config":  "<file>",
+      "mode_to_config":  {"<mode>": "<file>", ...},
+      "handler_groups":  {"<handler_key>": ["<mode>", ...], ...}
+    }
+    用于 hct_report 选择特性配置，以及 bot 分发到不同 handler。"""
+    path = json_path or get_config_path(MODE_ROUTING_FILE)
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def load_hct_feature_config(json_path: str = None) -> List[Dict[str, Any]]:
@@ -262,12 +288,12 @@ def load_hct_feature_config(json_path: str = None) -> List[Dict[str, Any]]:
             en = bool(sf.get("enabled", False)) and bool(sel)
             small_features.append({
                 "field_sql": sel if en else "",
-                "extractor": make_selector(sel) if en else (lambda _meta: []),
+                "extractor": make_selector(sel) if en else _EMPTY_EXTRACTOR,
                 "enabled": en,
             })
         # 至少占位一个，保持下游遍历稳定
         if not small_features:
-            small_features = [{"field_sql": "", "extractor": (lambda _meta: []), "enabled": False}]
+            small_features = [{"field_sql": "", "extractor": _EMPTY_EXTRACTOR, "enabled": False}]
 
         features.append(
             {

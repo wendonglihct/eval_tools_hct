@@ -16,13 +16,13 @@ PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")
 )
 sys.path.insert(0, PROJECT_ROOT)
-from report.hct_report import run_compare_hct
+from report.hct_report import HCTReportBuilder
+from report.config_loader import load_mode_routing
 from concurrent.futures import ThreadPoolExecutor
 from utils.log_utils import setup_bot_logger
-from threading import Lock
+from utils.paths import LOG_DIR, config_path
 
-tasks_lock = Lock()
-logger = setup_bot_logger(os.path.join(PROJECT_ROOT, "robot_memory/log"))
+logger = setup_bot_logger(LOG_DIR)
 logger.info("bot started")
 # 飞书开放平台应用的 App ID 和 App Secret
 APP_ID = "cli_a91545943de31bd9"
@@ -31,321 +31,320 @@ APP_SECRET = "qLUjkfbfisTW2eejmur6UgIDObjddo1t"
 # 全局线程池
 executor = ThreadPoolExecutor(max_workers=20)
 
-memory = {
-    "events_id": set(),   # 用 set 查询更快
-    "chats": {}           # 存对话
-}
+# 事件去重窗口（飞书重试会复用 event_id，用 set 拦截）
+memory = {"events_id": set()}
 
 
-def time_diff(event_time):
-    current_time_seconds = time.time()
-    current_time_milliseconds = int(current_time_seconds * 1e3)
-    # 200s之前的事件不处理
-    if abs(int(event_time) - current_time_milliseconds) >= 200000:
+class MessageParser:
+    """飞书消息文本 → (tasks_dict, ver_map, mode) 解析，以及事件时间窗去重判断。
+
+    纯函数集合，无状态；放成类只是为了让 robot.py 更结构化、便于后续扩展（如多种 DSL 语法）。
+    """
+
+    # 200 秒之前的事件不处理（飞书重试也走这里，避免历史事件被重复处理）
+    EVENT_TIME_WINDOW_MS = 200_000
+
+    @staticmethod
+    def is_event_stale(event_create_time_ms) -> bool:
+        current_ms = int(time.time() * 1e3)
+        return abs(int(event_create_time_ms) - current_ms) >= MessageParser.EVENT_TIME_WINDOW_MS
+
+    @staticmethod
+    def parse(res_content: str):
+        """提取 tasks_dict / ver_map / mode（mode 自动大写，缺省 DT_HCT）。"""
+        tasks_dict_str = re.search(r'tasks_dict\s*=\s*(\{.*?\})', res_content, re.S).group(1)
+        tasks_dict = ast.literal_eval(tasks_dict_str)
+
+        ver_map_match = re.search(r'ver_map\s*=\s*(\[.*?\])', res_content, re.S)
+        ver_map = ast.literal_eval(ver_map_match.group(1)) if ver_map_match else []
+
+        mode_match = re.search(r'mode\s*=\s*["\']?(.*?)["\']?\s*$', res_content, re.M)
+        mode = mode_match.group(1).upper() if mode_match else "DT_HCT"
+        return tasks_dict, ver_map, mode
+
+
+def _check_lark(response, action):
+    """飞书 OpenAPI 返回的统一成功检查：失败时按既定格式记 error 日志并返回 False。"""
+    if response.success():
         return True
+    try:
+        body = json.dumps(json.loads(response.raw.content), indent=4, ensure_ascii=False)
+    except Exception:
+        body = str(getattr(response.raw, "content", ""))
+    lark.logger.error(
+        f"{action} failed, code: {response.code}, msg: {response.msg}, "
+        f"log_id: {response.get_log_id()}, resp: \n{body}"
+    )
     return False
 
 
-def parse_res_content(res_content):
-    # 提取 tasks_dict
-    tasks_dict_str = re.search(r'tasks_dict\s*=\s*(\{.*?\})', res_content, re.S).group(1)
-    tasks_dict = ast.literal_eval(tasks_dict_str)
+class FeishuClient:
+    """飞书 OpenAPI 调用聚合。集中所有 token / drive / wiki / im / contact 操作；
+    业务侧通过单例 `feishu` 调用即可，避免全局 lark client 散落各处。
 
-    # ver_map
-    ver_map_match = re.search(r'ver_map\s*=\s*(\[.*?\])', res_content, re.S)
-    if ver_map_match:
-        ver_map = ast.literal_eval(ver_map_match.group(1))
-    else:
-        ver_map = []
-
-    # mode 默认 DT_HCT
-    mode_match = re.search(r'mode\s*=\s*["\']?(.*?)["\']?\s*$', res_content, re.M)
-    if mode_match:
-        mode = mode_match.group(1).upper()
-    else:
-        mode = "DT_HCT"
-
-    return tasks_dict, ver_map, mode
-
-
-def get_tenant_access_token(app_id: str, app_secret: str):
+    线程安全：内部不持任何可变态，仅持外部 lark.Client；所有方法可重入。
     """
-    获取飞书 tenant_access_token
-    """
-    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    payload = {
-        "app_id": app_id,
-        "app_secret": app_secret
-    }
 
-    try:
-        resp = requests.post(url, json=payload, timeout=5)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        raise RuntimeError(f"请求飞书接口失败: {e}")
+    # 飞书云空间挂载目标 / wiki 空间常量
+    PARENT_NODE = "Col0fBF8slvQrFdzEfAcAWygnYs"
+    WIKI_SPACE_ID = "7560534433279868930"
+    WIKI_PARENT_TOKEN = "GOgIwx6N8iutB5kIlXGcHuGEnnh"
+    WIKI_URL_PREFIX = "https://horizonrobotics.feishu.cn/wiki/"
 
-    data = resp.json()
-    if data.get("code") != 0:
-        raise RuntimeError(f"获取 tenant_access_token 失败: {data}")
+    def __init__(self, app_id, app_secret, lark_client):
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self._client = lark_client
 
-    token = data["tenant_access_token"]
-    expire = data["expire"]
-    return token, expire
+    # ---------- auth ----------
+    def get_tenant_access_token(self):
+        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        payload = {"app_id": self.app_id, "app_secret": self.app_secret}
+        try:
+            resp = requests.post(url, json=payload, timeout=5)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            raise RuntimeError(f"请求飞书接口失败: {e}")
+        data = resp.json()
+        if data.get("code") != 0:
+            raise RuntimeError(f"获取 tenant_access_token 失败: {data}")
+        return data["tenant_access_token"], data["expire"]
 
+    # ---------- drive ----------
+    def upload_file(self, file_path, file_name, te_token):
+        file_size = os.path.getsize(file_path)
+        url = "https://open.feishu.cn/open-apis/drive/v1/files/upload_all"
+        with open(file_path, "rb") as fp:
+            form = {
+                "file_name": file_name,
+                "parent_type": "explorer",
+                "parent_node": self.PARENT_NODE,
+                "size": str(file_size),
+                "file": fp,
+            }
+            multi_form = MultipartEncoder(form)
+            headers = {"Authorization": f"Bearer {te_token}", "Content-Type": multi_form.content_type}
+            response = requests.request("POST", url, headers=headers, data=multi_form)
+        time.sleep(5)
+        return json.loads(response.text)["data"]["file_token"]
 
-def upload_file(file_path, file_name, te_token):
-    file_size = os.path.getsize(file_path)
-    url = "https://open.feishu.cn/open-apis/drive/v1/files/upload_all"
-    form = {'file_name': file_name,
-            'parent_type': 'explorer',
-            'parent_node': 'Col0fBF8slvQrFdzEfAcAWygnYs',
-            'size': str(file_size),
-            'file': (open(file_path, 'rb'))}
-    multi_form = MultipartEncoder(form)
-    headers = {
-        'Authorization': f'Bearer {te_token}',
-    }
-    headers['Content-Type'] = multi_form.content_type
-    response = requests.request("POST", url, headers=headers, data=multi_form)
-    time.sleep(5)  # 等待文件上传成功
-    return json.loads(response.text)["data"]["file_token"]
-
-
-def transfer_sheet_to_feishu_sheet(file_token, file_name):
-    request: CreateImportTaskRequest = CreateImportTaskRequest.builder() \
-        .request_body(ImportTask.builder()
-            .file_extension("xlsx")
-            .file_token(file_token)
-            .type("sheet")
-            .file_name(file_name)
-            .point(ImportTaskMountPoint.builder()
-                .mount_type(1)
-                .mount_key("Col0fBF8slvQrFdzEfAcAWygnYs")
-                .build())
-            .build()) \
-        .build()
-
-    response: CreateImportTaskResponse = client.drive.v1.import_task.create(request)
-
-    if not response.success():
-        lark.logger.error(
-            f"client.drive.v1.import_task.create failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}, resp: \n{json.dumps(json.loads(response.raw.content), indent=4, ensure_ascii=False)}")
-        return
-
-    time.sleep(5)  # 等待任务导入成功
-    request: GetImportTaskRequest = GetImportTaskRequest.builder() \
-        .ticket(response.data.ticket) \
-        .build()
-
-    response: GetImportTaskResponse = client.drive.v1.import_task.get(request)
-
-    if not response.success():
-        lark.logger.error(
-            f"client.drive.v1.import_task.get failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}, resp: \n{json.dumps(json.loads(response.raw.content), indent=4, ensure_ascii=False)}")
-        return
-
-    return response.data.result.token
-
-
-def move_file_to_wiki(file_token, file_type):
-    request: MoveDocsToWikiSpaceNodeRequest = MoveDocsToWikiSpaceNodeRequest.builder() \
-        .space_id("7560534433279868930") \
-        .request_body(MoveDocsToWikiSpaceNodeRequestBody.builder()
-            .parent_wiki_token("GOgIwx6N8iutB5kIlXGcHuGEnnh")
-            .obj_type(file_type)
-            .obj_token(file_token)
-            .build()) \
-        .build()
-
-    response: MoveDocsToWikiSpaceNodeResponse = client.wiki.v2.space_node.move_docs_to_wiki(request)
-
-    if not response.success():
-        lark.logger.error(
-            f"client.wiki.v2.space_node.move_docs_to_wiki failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}, resp: \n{json.dumps(json.loads(response.raw.content), indent=4, ensure_ascii=False)}")
-        return
-
-    time.sleep(5)  # 等待文件转入wiki
-    task_id = response.data.task_id
-    request: GetTaskRequest = GetTaskRequest.builder() \
-        .task_id(task_id) \
-        .task_type("move") \
-        .build()
-
-    response: GetTaskResponse = client.wiki.v2.task.get(request)
-
-    if not response.success():
-        lark.logger.error(
-            f"client.wiki.v2.task.get failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}, resp: \n{json.dumps(json.loads(response.raw.content), indent=4, ensure_ascii=False)}")
-        return
-
-    url = f"https://horizonrobotics.feishu.cn/wiki/{response.data.task.move_result[0].node.node_token}"
-    return url
-
-
-def make_card(sheet_url):
-    # DT_HCT 模式使用 card_sv.json 模板
-    with open(os.path.join(os.path.dirname(__file__), "templates", "card_sv.json"), "r", encoding="utf-8") as f:
-        data = json.load(f)
-    data["body"]["elements"][0]["content"] = f"[评测结果-表格]({sheet_url})"
-    return json.dumps(data, ensure_ascii=False)
-
-
-# 文件名安全字符正则：保留中英文/数字/下划线/点；其他统一替换为 _
-_FILENAME_UNSAFE_RE = re.compile(r"[^\w.\u4e00-\u9fff]+")
-
-
-def _safe_filename_part(text: str, fallback: str = "unknown") -> str:
-    """把任意字符串转成安全的文件名片段（去掉 / \\ : * ? " < > | 等）。"""
-    t = _FILENAME_UNSAFE_RE.sub("_", str(text or "")).strip("_")
-    return t if t else fallback
-
-
-def get_user_name(open_id: str) -> str:
-    """根据 open_id 查询飞书用户名。失败时返回 'unknown'。"""
-    if not open_id:
-        return "unknown"
-    try:
-        request = (
-            GetUserRequest.builder()
-            .user_id(open_id)
-            .user_id_type("open_id")
+    def transfer_xlsx_to_sheet(self, file_token, file_name):
+        req = (
+            CreateImportTaskRequest.builder()
+            .request_body(
+                ImportTask.builder()
+                .file_extension("xlsx")
+                .file_token(file_token)
+                .type("sheet")
+                .file_name(file_name)
+                .point(ImportTaskMountPoint.builder().mount_type(1).mount_key(self.PARENT_NODE).build())
+                .build()
+            )
             .build()
         )
-        response = client.contact.v3.user.get(request)
-        if not response.success():
-            logger.warning(
-                f"get user name failed: code={response.code}, msg={response.msg}, "
-                f"log_id={response.get_log_id()}"
+        resp: CreateImportTaskResponse = self._client.drive.v1.import_task.create(req)
+        if not _check_lark(resp, "client.drive.v1.import_task.create"):
+            return
+        time.sleep(5)
+        req = GetImportTaskRequest.builder().ticket(resp.data.ticket).build()
+        resp: GetImportTaskResponse = self._client.drive.v1.import_task.get(req)
+        if not _check_lark(resp, "client.drive.v1.import_task.get"):
+            return
+        return resp.data.result.token
+
+    # ---------- wiki ----------
+    def move_to_wiki(self, file_token, file_type):
+        req = (
+            MoveDocsToWikiSpaceNodeRequest.builder()
+            .space_id(self.WIKI_SPACE_ID)
+            .request_body(
+                MoveDocsToWikiSpaceNodeRequestBody.builder()
+                .parent_wiki_token(self.WIKI_PARENT_TOKEN)
+                .obj_type(file_type)
+                .obj_token(file_token)
+                .build()
             )
+            .build()
+        )
+        resp: MoveDocsToWikiSpaceNodeResponse = self._client.wiki.v2.space_node.move_docs_to_wiki(req)
+        if not _check_lark(resp, "client.wiki.v2.space_node.move_docs_to_wiki"):
+            return
+        time.sleep(5)
+        task_id = resp.data.task_id
+        req = GetTaskRequest.builder().task_id(task_id).task_type("move").build()
+        resp: GetTaskResponse = self._client.wiki.v2.task.get(req)
+        if not _check_lark(resp, "client.wiki.v2.task.get"):
+            return
+        return f"{self.WIKI_URL_PREFIX}{resp.data.task.move_result[0].node.node_token}"
+
+    # ---------- contact ----------
+    def get_user_name(self, open_id):
+        if not open_id:
             return "unknown"
-        name = getattr(response.data.user, "name", None)
-        return name or "unknown"
-    except Exception as e:
-        logger.exception(f"get_user_name 异常: {e}")
-        return "unknown"
+        try:
+            req = GetUserRequest.builder().user_id(open_id).user_id_type("open_id").build()
+            resp = self._client.contact.v3.user.get(req)
+            if not resp.success():
+                logger.warning(
+                    f"get user name failed: code={resp.code}, msg={resp.msg}, "
+                    f"log_id={resp.get_log_id()}"
+                )
+                return "unknown"
+            return getattr(resp.data.user, "name", None) or "unknown"
+        except Exception as e:
+            logger.exception(f"get_user_name 异常: {e}")
+            return "unknown"
 
-
-def _send_text(data: P2ImMessageReceiveV1, text: str):
-    """统一的纯文本回复（p2p / 群聊自动分发）。"""
-    content = json.dumps({"text": text})
-    if data.event.message.chat_type == "p2p":
-        request = (
-            CreateMessageRequest.builder()
-            .receive_id_type("chat_id")
-            .request_body(
-                CreateMessageRequestBody.builder()
-                .receive_id(data.event.message.chat_id)
-                .uuid(data.header.event_id)
-                .msg_type("text")
-                .content(content)
+    # ---------- im ----------
+    def _create_or_reply(self, data, content, msg_type):
+        """根据 chat_type 自动走 create（p2p）或 reply（群聊）。"""
+        if data.event.message.chat_type == "p2p":
+            req = (
+                CreateMessageRequest.builder()
+                .receive_id_type("chat_id")
+                .request_body(
+                    CreateMessageRequestBody.builder()
+                    .receive_id(data.event.message.chat_id)
+                    .uuid(data.header.event_id)
+                    .msg_type(msg_type)
+                    .content(content)
+                    .build()
+                )
                 .build()
+            )
+            return self._client.im.v1.message.create(req)
+        req = (
+            ReplyMessageRequest.builder()
+            .message_id(data.event.message.message_id)
+            .request_body(
+                ReplyMessageRequestBody.builder().content(content).msg_type(msg_type).build()
             )
             .build()
         )
-        return client.im.v1.message.create(request)
-    request = (
-        ReplyMessageRequest.builder()
-        .message_id(data.event.message.message_id)
-        .request_body(
-            ReplyMessageRequestBody.builder()
-            .content(content)
-            .msg_type("text")
-            .build()
-        )
-        .build()
-    )
-    return client.im.v1.message.reply(request)
+        return self._client.im.v1.message.reply(req)
+
+    def send_text(self, data, text):
+        return self._create_or_reply(data, json.dumps({"text": text}), "text")
+
+    def send_card(self, data, content):
+        return self._create_or_reply(data, content, "interactive")
 
 
-def _send_card(data: P2ImMessageReceiveV1, content: str):
-    """统一的卡片回复（p2p / 群聊自动分发）。content 必须是 json string。"""
-    if data.event.message.chat_type == "p2p":
-        request = (
-            CreateMessageRequest.builder()
-            .receive_id_type("chat_id")
-            .request_body(
-                CreateMessageRequestBody.builder()
-                .receive_id(data.event.message.chat_id)
-                .uuid(data.header.event_id)
-                .msg_type("interactive")
-                .content(content)
-                .build()
-            )
-            .build()
-        )
-        return client.im.v1.message.create(request)
-    request = (
-        ReplyMessageRequest.builder()
-        .message_id(data.event.message.message_id)
-        .request_body(
-            ReplyMessageRequestBody.builder()
-            .content(content)
-            .msg_type("interactive")
-            .build()
-        )
-        .build()
-    )
-    return client.im.v1.message.reply(request)
+class CardBuilder:
+    """交互卡片渲染。当前仅 DT_HCT 用 card_sv.json，未来不同 mode 可用不同模板。"""
+
+    @classmethod
+    def _load_template(cls, name: str) -> dict:
+        with open(config_path(name), "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    @classmethod
+    def hct_result_card(cls, sheet_url: str) -> str:
+        """注入 sheet 链接到 card_sv.json 的第一个 text 元素，返回 JSON 字符串。"""
+        data = cls._load_template("card_sv.json")
+        data["body"]["elements"][0]["content"] = f"[评测结果-表格]({sheet_url})"
+        return json.dumps(data, ensure_ascii=False)
+
+
+class UserLookup:
+    """open_id → 用户姓名 / 安全文件名片段。失败时返回 fallback，永不抛异常给上游。"""
+
+    # 文件名安全字符正则：保留中英文/数字/下划线/点；其他统一替换为 _
+    _FILENAME_UNSAFE_RE = re.compile(r"[^\w.\u4e00-\u9fff]+")
+
+    def __init__(self, feishu_client):
+        self._feishu = feishu_client
+
+    def name(self, open_id: str) -> str:
+        return self._feishu.get_user_name(open_id)
+
+    @classmethod
+    def safe_filename(cls, text: str, fallback: str = "unknown") -> str:
+        t = cls._FILENAME_UNSAFE_RE.sub("_", str(text or "")).strip("_")
+        return t if t else fallback
+
 
 def _run_dt_hct(data: P2ImMessageReceiveV1, tasks_dict, ver_map, mode):
-    """DT_HCT 主流程：下载 → 对比 → 上传 → 转 sheet → 入 wiki → 卡片回复。
-    mode 透传到 run_compare_hct，由其按 mode 选择 configs 下的 JSON。"""
-    te_token, _ = get_tenant_access_token(APP_ID, APP_SECRET)
+    """DT_HCT 主流程：下载 → 对比 → 上传 → 转 sheet → 入 wiki → 卡片回复。"""
+    te_token, _ = feishu.get_tenant_access_token()
 
     file_name_suffix = time.strftime("%Y%m%d%H%M%S", time.localtime())
-    msg = ""
-    msg, xlsx_path, txt_path, all_ver_com, tag_lv1_ver_com, tag_all_ver_com = run_compare_hct(
-        tasks_dict, ver_map, msg, file_name_suffix, mode
-    )
+    xlsx_path = HCTReportBuilder.build_report(tasks_dict, ver_map, file_name_suffix, mode)
 
     # 取发送者 open_id → 用户名 → 拼入文件名
     sender = getattr(data.event, "sender", None)
     sender_id = getattr(sender, "sender_id", None) if sender else None
     open_id = getattr(sender_id, "open_id", None) if sender_id else None
-    user_name = _safe_filename_part(get_user_name(open_id))
+    user_name = UserLookup.safe_filename(feishu.get_user_name(open_id))
     feishu_file_name = f"多版本评测结果_{mode}_{user_name}_{file_name_suffix}.xlsx"
     logger.info(f"飞书文件名: {feishu_file_name}  (user={user_name}, open_id={open_id})")
 
-    xlsx_token = upload_file(xlsx_path, feishu_file_name, te_token)
-    feish_sheet_token = transfer_sheet_to_feishu_sheet(xlsx_token, feishu_file_name)
-    sheet_url = move_file_to_wiki(feish_sheet_token, "sheet")
+    xlsx_token = feishu.upload_file(xlsx_path, feishu_file_name, te_token)
+    feish_sheet_token = feishu.transfer_xlsx_to_sheet(xlsx_token, feishu_file_name)
+    sheet_url = feishu.move_to_wiki(feish_sheet_token, "sheet")
 
-    response = _send_card(data, make_card(sheet_url))
+    response = feishu.send_card(data, CardBuilder.hct_result_card(sheet_url))
     if not response.success():
         raise Exception(f"消息发送失败: {response.code}, {response.msg}, log_id: {response.get_log_id()}")
 
 
-def process_message_async(data: P2ImMessageReceiveV1, res_content: str):
-    """
-    耗时任务：解析消息并按 mode 分发。
-    - DT_HCT       → 运行 hct 报告流程
-    - PENDING_MODES → 返回「功能暂未实现」
-    - 其他          → 返回「mode 输入错误，暂不支持该值」
-    """
-    PENDING_MODES = ["DT_HCT_CLOSE"]
-    HCT_MODES = ["DT_HCT", "DT_HCT_OPEN"]
-    try:
-        logger.info(f"输入内容：{res_content}")
-        tasks_dict, ver_map, mode = parse_res_content(res_content)
+class Dispatcher:
+    """根据 modes.json 的 handler_groups 把 mode 派发到对应 handler。
 
-        if mode in HCT_MODES:
-            _run_dt_hct(data, tasks_dict, ver_map, mode)
-        elif mode in PENDING_MODES:
-            logger.info(f"mode={mode} 功能暂未实现")
-            _send_text(data, f"功能开发中，暂未上线：mode={mode}")
-        else:
-            logger.warning(f"mode={mode} 不在支持列表中")
-            supported = ["DT_HCT"] + sorted(PENDING_MODES)
-            _send_text(
-                data,
-                f"mode 输入错误，暂不支持该值：{mode}\n当前已支持：{supported}"
-            )
-    except Exception as e:
-        logger.exception("处理消息失败")
+    handler 注册采用类属性字典 HANDLERS，便于后续按 mode 注册新业务而无需改本类。
+    对外暴露 dispatch(data, res_content) 一个方法即可：
+      - 解析消息
+      - 查 handler_key
+      - 三态：handler 已注册 → 执行；handler_key 找到但未注册 → 「功能开发中」；无 handler_key → 「mode 错误」
+      - 任意异常 → 回复 "评测对比任务失败"
+    """
+
+    HANDLERS = {}  # handler_key -> callable(data, tasks_dict, ver_map, mode)
+
+    def __init__(self, feishu_client):
+        self._feishu = feishu_client
+
+    @classmethod
+    def register(cls, handler_key: str, fn):
+        cls.HANDLERS[handler_key] = fn
+
+    def dispatch(self, data, res_content: str):
         try:
-            _send_text(data, f"评测对比任务失败：{e}")
-        except Exception:
-            logger.exception("回复异常消息失败")
+            logger.info(f"输入内容：{res_content}")
+            tasks_dict, ver_map, mode = MessageParser.parse(res_content)
+
+            routing = load_mode_routing()
+            groups = routing.get("handler_groups", {}) or {}
+
+            handler_key = next(
+                (k for k, modes in groups.items() if mode in (modes or [])),
+                None,
+            )
+
+            if handler_key is None:
+                all_supported = sorted({m for modes in groups.values() for m in (modes or [])})
+                logger.warning(f"mode={mode} 不在任何 handler_group 中")
+                self._feishu.send_text(
+                    data,
+                    f"mode 输入错误，暂不支持该值：{mode}\n当前已支持：{all_supported}"
+                )
+                return
+
+            handler = self.HANDLERS.get(handler_key)
+            if handler is None:
+                logger.info(f"mode={mode} 命中 handler_key={handler_key}，但 handler 未实现")
+                self._feishu.send_text(
+                    data, f"功能开发中，暂未上线：mode={mode}（handler={handler_key}）"
+                )
+                return
+
+            handler(data, tasks_dict, ver_map, mode)
+        except Exception as e:
+            logger.exception("处理消息失败")
+            try:
+                self._feishu.send_text(data, f"评测对比任务失败：{e}")
+            except Exception:
+                logger.exception("回复异常消息失败")
 
 
 def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
@@ -358,12 +357,12 @@ def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
     else:
         res_content = "解析消息失败，请发送文本消息\nparse message failed, please send text message"
     # 去重
-    if data.header.event_id in memory["events_id"] or time_diff(data.header.create_time):
+    if data.header.event_id in memory["events_id"] or MessageParser.is_event_stale(data.header.create_time):
         return
     else:
         memory["events_id"].add(data.header.event_id)
     logger.info(f"Received a new message, start processing event_id={data.header.event_id}")
-    executor.submit(process_message_async, data, res_content)
+    executor.submit(dispatcher.dispatch, data, res_content)
 
 
 # 注册事件回调
@@ -376,6 +375,12 @@ event_handler = (
 
 # 创建 LarkClient 和 LarkWSClient
 client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
+# 实例化 FeishuClient 单例（旧的模块级函数全部通过它代理）
+feishu = FeishuClient(APP_ID, APP_SECRET, client)
+# 实例化 Dispatcher 单例并注册 handler（handler_key 来自 modes.json/handler_groups）
+dispatcher = Dispatcher(feishu)
+Dispatcher.register("DT_HCT", _run_dt_hct)
+# 后续: Dispatcher.register("DT_HCT_CLOSE", _run_dt_hct_close)
 wsClient = lark.ws.Client(
     APP_ID,
     APP_SECRET,

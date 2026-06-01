@@ -14,7 +14,7 @@ ENTRY="$SCRIPT_DIR/main.py"
 RUNTIME_DIR="$SCRIPT_DIR/outputs/runtime"
 PID_FILE="$RUNTIME_DIR/robot.pid"
 STDOUT_LOG="$RUNTIME_DIR/robot.out"
-BOT_LOG="$SCRIPT_DIR/robot_memory/log/chatbot.log"
+BOT_LOG="$SCRIPT_DIR/outputs/log/chatbot.log"
 
 mkdir -p "$RUNTIME_DIR"
 

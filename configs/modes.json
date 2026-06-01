@@ -1,0 +1,11 @@
+{
+  "default_config": "hct_report_config.json",
+  "mode_to_config": {
+    "DT_HCT": "hct_report_config.json",
+    "DT_HCT_OPEN": "hct_report_config.json"
+  },
+  "handler_groups": {
+    "DT_HCT": ["DT_HCT", "DT_HCT_OPEN"],
+    "DT_HCT_CLOSE": ["DT_HCT_CLOSE"]
+  }
+}
