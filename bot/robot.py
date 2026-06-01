@@ -61,7 +61,7 @@ def parse_res_content(res_content):
     # mode 默认 DT_HCT
     mode_match = re.search(r'mode\s*=\s*["\']?(.*?)["\']?\s*$', res_content, re.M)
     if mode_match:
-        mode = mode_match.group(1)
+        mode = mode_match.group(1).upper()
     else:
         mode = "DT_HCT"
 
@@ -287,11 +287,6 @@ def _send_card(data: P2ImMessageReceiveV1, content: str):
     )
     return client.im.v1.message.reply(request)
 
-
-# 已知但尚未实现的 mode，命中后返回「功能暂未实现」提示
-PENDING_MODES = {"DT_HCT_CLOSE"}
-
-
 def _run_dt_hct(data: P2ImMessageReceiveV1, tasks_dict, ver_map, mode):
     """DT_HCT 主流程：下载 → 对比 → 上传 → 转 sheet → 入 wiki → 卡片回复。
     mode 透传到 run_compare_hct，由其按 mode 选择 configs 下的 JSON。"""
@@ -308,7 +303,7 @@ def _run_dt_hct(data: P2ImMessageReceiveV1, tasks_dict, ver_map, mode):
     sender_id = getattr(sender, "sender_id", None) if sender else None
     open_id = getattr(sender_id, "open_id", None) if sender_id else None
     user_name = _safe_filename_part(get_user_name(open_id))
-    feishu_file_name = f"DT多版本评测结果_hct_{user_name}_{file_name_suffix}.xlsx"
+    feishu_file_name = f"多版本评测结果_{mode}_{user_name}_{file_name_suffix}.xlsx"
     logger.info(f"飞书文件名: {feishu_file_name}  (user={user_name}, open_id={open_id})")
 
     xlsx_token = upload_file(xlsx_path, feishu_file_name, te_token)
@@ -327,15 +322,17 @@ def process_message_async(data: P2ImMessageReceiveV1, res_content: str):
     - PENDING_MODES → 返回「功能暂未实现」
     - 其他          → 返回「mode 输入错误，暂不支持该值」
     """
+    PENDING_MODES = ["DT_HCT_CLOSE"]
+    HCT_MODES = ["DT_HCT", "DT_HCT_OPEN"]
     try:
         logger.info(f"输入内容：{res_content}")
         tasks_dict, ver_map, mode = parse_res_content(res_content)
 
-        if mode.upper() in ["DT_HCT", "DT_HCT_OPEN"]:
+        if mode in HCT_MODES:
             _run_dt_hct(data, tasks_dict, ver_map, mode)
-        elif mode.upper() in PENDING_MODES:
+        elif mode in PENDING_MODES:
             logger.info(f"mode={mode} 功能暂未实现")
-            _send_text(data, f"功能暂未实现：mode={mode}")
+            _send_text(data, f"功能开发中，暂未上线：mode={mode}")
         else:
             logger.warning(f"mode={mode} 不在支持列表中")
             supported = ["DT_HCT"] + sorted(PENDING_MODES)

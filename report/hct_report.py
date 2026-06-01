@@ -339,6 +339,7 @@ def _feature_configs(mode=None):
 DEFAULT_CONFIG_FILE = "hct_report_config.json"
 MODE_CONFIG_MAP = {
     "DT_HCT": "hct_report_config.json",
+    "DT_HCT_OPEN": "hct_report_config.json",
     # 例: "DT_HCT_close": "hct_report_close_config.json",
 }
 
@@ -982,9 +983,9 @@ def run_compare_hct(tasks_dict, ver_map, msg, file_name_suffix, mode="DT_HCT"):
         ws_default.title = _safe_sheet_title("DT_HCT", used_sheet_names)
 
     _ensure_output_dirs()
-    xlsx_path = os.path.join(REPORTS_DIR, f"output_hct_{file_name_suffix}.xlsx")
+    xlsx_path = os.path.join(REPORTS_DIR, f"{mode}_{file_name_suffix}.xlsx")
     wb.save(xlsx_path)
-    txt_path = os.path.join(REPORTS_DIR, f"output_hct_{file_name_suffix}.txt")
+    txt_path = os.path.join(REPORTS_DIR, f"{mode}_{file_name_suffix}.txt")
     all_ver_com = {}
     tag_lv1_ver_com = {}
     tag_all_ver_com = defaultdict(dict)
