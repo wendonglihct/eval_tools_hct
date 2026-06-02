@@ -781,6 +781,40 @@ class BundleBuilder:
         }
 
 
+def _calc_small_feature_threshold(rollback_raw, optimize_raw, total_base, small_base):
+    """计算小特性的比例阈值。
+
+    规则：小特性阈值 = 总阈值 × (小特性base值 / 总base值)，向上取整
+    例如：总阈值 rollback=<100, optimize=<-100
+          总base=16420, 小特性base=730
+          占比=730/16420≈0.0445
+          rollback=ceil(100×0.0445)=5, optimize=ceil(-100×0.0445)=-5
+
+    返回：(rollback_str, optimize_str)
+    """
+    import math
+
+    # 解析总阈值（使用 ExcelStyler 的类方法）
+    rb_op, rb_num = ExcelStyler._parse_threshold(rollback_raw)
+    opt_op, opt_num = ExcelStyler._parse_threshold(optimize_raw)
+
+    if rb_num is None or opt_num is None or total_base <= 0 or small_base <= 0:
+        return rollback_raw, optimize_raw
+
+    # 计算比例
+    ratio = small_base / total_base
+
+    # 向上取整（正数向上，负数向下即绝对值向上）
+    new_rb = math.ceil(abs(rb_num) * ratio)
+    new_opt = math.ceil(abs(opt_num) * ratio)
+
+    # 保持操作符和符号方向
+    rollback_str = f"{rb_op}{new_rb}" if rb_op else f"<{new_rb}"
+    optimize_str = f"{opt_op}-{new_opt}" if opt_op else f"<-{new_opt}"
+
+    return rollback_str, optimize_str
+
+
 class HCTReportBuilder:
     """HCT 报告主流程编排。
 
@@ -875,18 +909,25 @@ class HCTReportBuilder:
             for result_item in feature["results"]
         ]
         primary_bundle = result_bundles[feature.get("primary_result", 0)]
+        base_task = task_ids[0]
 
         major_feature_row_idx.add(next_row_idx)
         feature_start_row = next_row_idx
         for idx, bundle in enumerate(result_bundles):
             result_item = bundle["result_item"]
+            # 每个指标项使用自身的阈值
+            result_rollback = result_item.get("rollback_threshold", "")
+            result_optimize = result_item.get("optimize_threshold", "")
+            result_base_value = abs(bundle["stats"].get(base_task, {}).get("metric_sum", 0.0))
+            result_enable_split = bool(result_item.get("enable_split", False))
+
             all_rows.append(
                 RowComposer.build(
                     feature["name"] if idx == 0 else "",
                     feature["sql"] if idx == 0 else "",
                     bundle["formula_text"],
                     result_item["name"], result_item["note"],
-                    result_item["rollback_threshold"], result_item["optimize_threshold"],
+                    result_rollback, result_optimize,
                     task_ids,
                     bundle["stats"], bundle["base_ref_stats"],
                     bundle["base_denominator_stats"], bundle["version_denominator_stats"],
@@ -896,23 +937,33 @@ class HCTReportBuilder:
             next_row_idx += 1
         merge_ranges.append((feature_start_row, next_row_idx - 1))
 
+        # 小特性渲染：使用 primary 指标项的阈值（用于排序和整体展示）
+        primary_result_item = feature["results"][feature.get("primary_result", 0)]
+        primary_rollback = primary_result_item.get("rollback_threshold", "")
+        primary_optimize = primary_result_item.get("optimize_threshold", "")
+        primary_base_value = abs(primary_bundle["stats"].get(base_task, {}).get("metric_sum", 0.0))
+        primary_enable_split = bool(primary_result_item.get("enable_split", False))
+
         for sf_idx, sf_cfg in enumerate(small_features):
             if not sf_cfg.get("enabled", True):
                 continue
             next_row_idx = cls._render_small_feature_block(
                 feature, sf_idx, sf_cfg, result_bundles, primary_bundle, task_ids,
                 all_rows, merge_ranges, next_row_idx,
+                primary_rollback, primary_optimize, primary_base_value, primary_enable_split,
             )
         return next_row_idx
 
     # ---------- 小特性 value + other ----------
     @classmethod
     def _render_small_feature_block(cls, feature, sf_idx, sf_cfg, result_bundles, primary_bundle,
-                                    task_ids, all_rows, merge_ranges, next_row_idx):
+                                    task_ids, all_rows, merge_ranges, next_row_idx,
+                                    total_rollback, total_optimize, total_base_value, enable_split):
         field_sql = sf_cfg.get("field_sql", "")
         primary_small = primary_bundle["small_stats"][sf_idx]
         primary_value_stats = primary_small["value_stats"]
         primary_other_stats = primary_small["other_stats"]
+        base_task = task_ids[0]
 
         value_order = sorted(
             primary_value_stats.keys(),
@@ -924,13 +975,31 @@ class HCTReportBuilder:
             for idx, bundle in enumerate(result_bundles):
                 result_item = bundle["result_item"]
                 small = bundle["small_stats"][sf_idx]
+
+                # 每个指标项使用自身的阈值和 enable_split 配置
+                item_rollback = result_item.get("rollback_threshold", "")
+                item_optimize = result_item.get("optimize_threshold", "")
+                item_base_value = abs(bundle["stats"].get(base_task, {}).get("metric_sum", 0.0))
+                item_enable_split = bool(result_item.get("enable_split", False))
+
+                if item_enable_split:
+                    small_base_value = abs(
+                        small["value_stats"].get(value, {}).get(base_task, {}).get("metric_sum", 0.0)
+                    )
+                    small_rb, small_opt = _calc_small_feature_threshold(
+                        item_rollback, item_optimize, item_base_value, small_base_value
+                    )
+                else:
+                    small_rb = item_rollback
+                    small_opt = item_optimize
+
                 all_rows.append(
                     RowComposer.build(
                         f"--{value}" if idx == 0 else "",
                         f'{field_sql} = "{value}"' if idx == 0 else "",
                         bundle["formula_text"],
                         result_item["name"], result_item["note"],
-                        result_item["rollback_threshold"], result_item["optimize_threshold"],
+                        small_rb, small_opt,
                         task_ids,
                         _stats_or_default(small["value_stats"], value, task_ids),
                         _stats_or_default(small["base_value_stats"], value, task_ids),
@@ -942,18 +1011,34 @@ class HCTReportBuilder:
                 next_row_idx += 1
             merge_ranges.append((small_start_row, next_row_idx - 1))
 
+        # other 行：同样使用每个指标项自身的阈值
         if _sum_counts(primary_other_stats) > 0:
             other_start_row = next_row_idx
             for idx, bundle in enumerate(result_bundles):
                 result_item = bundle["result_item"]
                 small = bundle["small_stats"][sf_idx]
+
+                item_rollback = result_item.get("rollback_threshold", "")
+                item_optimize = result_item.get("optimize_threshold", "")
+                item_base_value = abs(bundle["stats"].get(base_task, {}).get("metric_sum", 0.0))
+                item_enable_split = bool(result_item.get("enable_split", False))
+
+                if item_enable_split:
+                    other_base_value = abs(small["other_stats"].get(base_task, {}).get("metric_sum", 0.0))
+                    other_rb, other_opt = _calc_small_feature_threshold(
+                        item_rollback, item_optimize, item_base_value, other_base_value
+                    )
+                else:
+                    other_rb = item_rollback
+                    other_opt = item_optimize
+
                 all_rows.append(
                     RowComposer.build(
                         "--other" if idx == 0 else "",
                         f'{field_sql} = "other"' if idx == 0 else "",
                         bundle["formula_text"],
                         result_item["name"], result_item["note"],
-                        result_item["rollback_threshold"], result_item["optimize_threshold"],
+                        other_rb, other_opt,
                         task_ids,
                         small["other_stats"], small["base_other_stats"],
                         small["base_other_den_stats"], small["version_other_den_stats"],

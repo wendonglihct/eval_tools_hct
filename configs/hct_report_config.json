@@ -21,8 +21,9 @@
         "numerator": "DirectionDeviMetricOP_EvalFailedFrame",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<100",
+        "optimize_threshold": "<-100",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -34,6 +35,7 @@
         "value_format": "int",
         "rollback_threshold": "<10",
         "optimize_threshold": "<-10",
+        "enable_split": true,
         "note": "越小越好"
       }
     ],
@@ -55,8 +57,8 @@
         "numerator": "CollisionRiskMetricOP_takeover_average_score",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<1",
-        "optimize_threshold": "<-1",
+        "rollback_threshold": "<0.3",
+        "optimize_threshold": "<-0.3",
         "note": "越小越好"
       },
       {
@@ -66,8 +68,8 @@
         "numerator": "YieldDistanceMetricOP_AvgDist",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
+        "rollback_threshold": "<0.1",
+        "optimize_threshold": "<-0.1",
         "note": "越小越好"
       },
       {
@@ -90,6 +92,7 @@
         "value_format": "int",
         "rollback_threshold": "<10",
         "optimize_threshold": "<-10",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -99,8 +102,8 @@
         "numerator": "CollisionRiskMetricOP_MultiTraj_takeover_average_score_Avg",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<1",
-        "optimize_threshold": "<-1",
+        "rollback_threshold": "<0.3",
+        "optimize_threshold": "<-0.3",
         "note": "越小越好"
       },
       {
@@ -110,8 +113,8 @@
         "numerator": "YieldDistanceMetricOP_MultiTraj_AvgDist_Avg",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
+        "rollback_threshold": "<0.1",
+        "optimize_threshold": "<-0.1",
         "note": "越小越好"
       }
     ],
@@ -144,8 +147,9 @@
         "numerator": "GoCenterMetricOP_EvalFailedFrame",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<500",
+        "optimize_threshold": "<-500",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -156,8 +160,8 @@
         "denominator": null,
         "filter": "GoCenterMetricOP.metric_value <= 5.0",
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
+        "rollback_threshold": "<0.1",
+        "optimize_threshold": "<-0.1",
         "note": "越小越好"
       }
     ],
@@ -179,8 +183,8 @@
         "numerator": "CollisionRiskMetricOP_takeover_average_score",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<1",
-        "optimize_threshold": "<-1",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
         "note": "越小越好"
       },
       {
@@ -190,8 +194,8 @@
         "numerator": "YieldDistanceMetricOP_AvgDist",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
+        "rollback_threshold": "<0.1",
+        "optimize_threshold": "<-0.1",
         "note": "越小越好"
       },
       {
@@ -212,8 +216,9 @@
         "numerator": "YieldCollisionMetricOP_Collision",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<30",
+        "optimize_threshold": "<-30",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -223,8 +228,8 @@
         "numerator": "CollisionRiskMetricOP_MultiTraj_takeover_average_score_Avg",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<1",
-        "optimize_threshold": "<-1",
+        "rollback_threshold": "<0.5",
+        "optimize_threshold": "<-0.5",
         "note": "越小越好"
       },
       {
@@ -234,8 +239,8 @@
         "numerator": "YieldDistanceMetricOP_MultiTraj_AvgDist_Avg",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
+        "rollback_threshold": "<0.1",
+        "optimize_threshold": "<-0.1",
         "note": "越小越好"
       },
       {
@@ -247,6 +252,7 @@
         "value_format": "int",
         "rollback_threshold": "<10",
         "optimize_threshold": "<-10",
+        "enable_split": true,
         "note": "越小越好"
       }
     ],
@@ -283,8 +289,9 @@
         "numerator": "LCIntentionMetricOP_deprecated_extralc+LCIntentionMetricOP_deprecated_notlc",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<60",
+        "optimize_threshold": "<-60",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -316,8 +323,9 @@
         "numerator": "SolidLineLaneChangeMetricOP",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<100",
+        "optimize_threshold": "<-100",
+        "enable_split": true,
         "note": "越小越好"
       }
     ],
@@ -339,8 +347,9 @@
         "numerator": "TrajAreaMetric_EvalFailedFrame+RedLightPassMetricOP_fail_eval_frame",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<20",
+        "optimize_threshold": "<-20",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -350,8 +359,9 @@
         "numerator": "TrajAreaMetric_EvalFailedFrame",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<20",
+        "optimize_threshold": "<-20",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -361,8 +371,9 @@
         "numerator": "RedLightPassMetricOP_fail_eval_frame",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<5",
+        "optimize_threshold": "<-5",
+        "enable_split": true,
         "note": "越小越好"
       }
     ],
@@ -384,8 +395,9 @@
         "numerator": "LatLonTrajLimitMetricOP+AnnoHardBrakeMetricOP_fail_frame",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<50",
+        "optimize_threshold": "<-50",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -395,8 +407,8 @@
         "numerator": "LatLonTrajLimitMetricOP",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<1",
+        "optimize_threshold": "<-1",
         "note": "越小越好"
       },
       {
@@ -407,9 +419,9 @@
         "denominator": null,
         "filter": "LatLonTrajLimitMetricOP.metric_result:false",
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
-        "note": "越小越好"
+        "rollback_threshold": ">-0.3",
+        "optimize_threshold": ">0.3",
+        "note": "越大越好"
       },
       {
         "name": "verify帧数差",
@@ -418,8 +430,9 @@
         "numerator": "AnnoHardBrakeMetricOP_fail_frame",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
+        "rollback_threshold": "<5",
+        "optimize_threshold": "<-5",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -429,9 +442,9 @@
         "numerator": "AnnoHardBrakeMetricOP_fail_acc",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
-        "note": "越小越好"
+        "rollback_threshold": ">-0.5",
+        "optimize_threshold": ">0.5",
+        "note": "越大越好"
       }
     ],
     "小特性": [
@@ -454,6 +467,7 @@
         "value_format": "int",
         "rollback_threshold": "<10",
         "optimize_threshold": "<-10",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -463,20 +477,20 @@
         "numerator": "LatLonTrajLimitMetricOP_AccAverage",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
-        "note": "越小越好"
+        "rollback_threshold": ">-0.2",
+        "optimize_threshold": ">0.2",
+        "note": "越大越好"
       },
       {
-        "name": "TrajArea平均aspeed差",
+        "name": "TrajArea平均speed差",
         "enabled": true,
         "agg": "ave",
         "numerator": "LatLonTrajLimitMetricOP_SpeedAverage",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
-        "note": "越小越好"
+        "rollback_threshold": ">-1",
+        "optimize_threshold": ">1",
+        "note": "越大越好"
       }
     ],
     "小特性": [
@@ -499,6 +513,7 @@
         "value_format": "int",
         "rollback_threshold": "<10",
         "optimize_threshold": "<-10",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -508,20 +523,20 @@
         "numerator": "LatLonTrajLimitMetricOP_AccAverage",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
-        "note": "越小越好"
+        "rollback_threshold": ">-0.1",
+        "optimize_threshold": ">0.1",
+        "note": "越大越好"
       },
       {
-        "name": "TrajArea平均aspeed差",
+        "name": "TrajArea平均speed差",
         "enabled": true,
         "agg": "ave",
         "numerator": "LatLonTrajLimitMetricOP_SpeedAverage",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
-        "note": "越小越好"
+        "rollback_threshold": ">-0.5",
+        "optimize_threshold": ">0.5",
+        "note": "越大越好"
       }
     ],
     "小特性": [
@@ -544,6 +559,7 @@
         "value_format": "int",
         "rollback_threshold": "<10",
         "optimize_threshold": "<-10",
+        "enable_split": true,
         "note": "越小越好"
       },
       {
@@ -553,20 +569,20 @@
         "numerator": "LatLonTrajLimitMetricOP_AccAverage",
         "denominator": null,
         "value_format": "float",
-        "rollback_threshold": "<0.5",
-        "optimize_threshold": "<-0.5",
-        "note": "越小越好"
+        "rollback_threshold": ">-0.1",
+        "optimize_threshold": ">0.1",
+        "note": "越大越好"
       },
       {
-        "name": "TrajArea平均aspeed差",
+        "name": "TrajArea平均speed差",
         "enabled": true,
         "agg": "ave",
         "numerator": "LatLonTrajLimitMetricOP_SpeedAverage",
         "denominator": null,
         "value_format": "int",
-        "rollback_threshold": "<10",
-        "optimize_threshold": "<-10",
-        "note": "越小越好"
+        "rollback_threshold": ">-0.5",
+        "optimize_threshold": ">0.5",
+        "note": "越大越好"
       }
     ],
     "小特性": [
