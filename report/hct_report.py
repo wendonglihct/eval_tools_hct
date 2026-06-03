@@ -2,11 +2,12 @@ import os
 import re
 import sys
 import json
+import math
 import operator
 import subprocess
-from collections import defaultdict
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
+import openpyxl.utils
 
 # 允许直接 `python report/hct_report.py` 运行（debugger 场景）
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -792,8 +793,6 @@ def _calc_small_feature_threshold(rollback_raw, optimize_raw, total_base, small_
 
     返回：(rollback_str, optimize_str)
     """
-    import math
-
     # 解析总阈值（使用 ExcelStyler 的类方法）
     rb_op, rb_num = ExcelStyler._parse_threshold(rollback_raw)
     opt_op, opt_num = ExcelStyler._parse_threshold(optimize_raw)
@@ -829,7 +828,7 @@ class HCTReportBuilder:
     HEADER_FIXED = ["数据分类", "Sql语句", "数量", "分析逻辑", "评测内容",
                     "回退阈值", "优秀阈值", "注释", "基数(总数)"]
     COLUMN_WIDTHS = {"A": 26, "B": 30, "C": 6, "D": 30, "E": 16,
-                     "F": 8, "G": 8, "H": 10, "I": 20, "J": 15}
+                     "F": 8, "G": 8, "H": 10, "I": 20, "J": 20}
 
     @classmethod
     def build_report(cls, tasks_dict, ver_map, file_name_suffix, mode="DT_HCT"):
@@ -1065,6 +1064,10 @@ class HCTReportBuilder:
                 ws.cell(row=row_idx, column=col_idx).alignment = Alignment(horizontal="left", vertical="center")
         for col_letter, width in cls.COLUMN_WIDTHS.items():
             ws.column_dimensions[col_letter].width = width
+        # J 列及之后的数据列统一加宽到 20
+        for col_idx in range(10, ws.max_column + 1):
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = 20
         ExcelStyler.apply_threshold_coloring(ws, rollback_col=6, optimize_col=7, first_result_col=11)
 
 

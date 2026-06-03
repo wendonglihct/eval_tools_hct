@@ -18,6 +18,7 @@ PROJECT_ROOT = os.path.abspath(
 sys.path.insert(0, PROJECT_ROOT)
 from report.hct_report import HCTReportBuilder
 from report.config_loader import load_mode_routing
+from report.debug_report import process_debug_report
 from concurrent.futures import ThreadPoolExecutor
 from utils.log_utils import setup_bot_logger
 from utils.paths import LOG_DIR, config_path
@@ -283,10 +284,17 @@ def _run_dt_hct(data: P2ImMessageReceiveV1, tasks_dict, ver_map, mode):
     feish_sheet_token = feishu.transfer_xlsx_to_sheet(xlsx_token, feishu_file_name)
     sheet_url = feishu.move_to_wiki(feish_sheet_token, "sheet")
 
+    # 发送原卡片（wiki 链接）
     response = feishu.send_card(data, CardBuilder.hct_result_card(sheet_url))
     if not response.success():
         raise Exception(f"消息发送失败: {response.code}, {response.msg}, log_id: {response.get_log_id()}")
 
+    # 发送简表卡片
+    # card_json = process_debug_report(xlsx_path, sheet_url)
+    # card_content = json.dumps(card_json, ensure_ascii=False)
+    # response = feishu.send_card(data, card_content)
+    # if not response.success():
+    #     raise Exception(f"简表卡片发送失败: {response.code}, {response.msg}, log_id: {response.get_log_id()}")
 
 class Dispatcher:
     """根据 modes.json 的 handler_groups 把 mode 派发到对应 handler。
